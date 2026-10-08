@@ -58,6 +58,35 @@ struct TreeItem: Identifiable, Hashable, Sendable {
     }
 }
 
+/// What the status bar says about a multi-row selection.
+struct SelectionSummary: Equatable, Sendable {
+    let count: Int
+    let seconds: UInt64
+    let bytes: UInt64
+    /// How many of the selected tracks are in loaded pages (only those can be totalled).
+    let totalled: Int
+
+    var isPartial: Bool { totalled < count }
+
+    var text: String {
+        var text = "\(count) tracks \u{00B7} \(CellFormat.totalTime(seconds)) \u{00B7} \(CellFormat.bytes(bytes))"
+        if isPartial { text += " (loaded rows only)" }
+        return text
+    }
+}
+
+extension ColumnContext {
+    /// The column layout a track source uses.
+    init(_ source: TrackSource) {
+        switch source {
+        case .collection, .tagList: self = .collection
+        case .playlist, .playlistFolder: self = .playlist
+        case .history: self = .history
+        case .folder: self = .folder
+        }
+    }
+}
+
 @MainActor @Observable
 final class AppModel {
     enum Phase: Equatable {
@@ -67,6 +96,9 @@ final class AppModel {
     }
 
     let backend: any BackendProtocol
+    /// The rows of the open view, shared with the table.
+    let pager: RowPager
+    let layoutStore: ColumnLayoutStore
 
     private(set) var phase: Phase = .loading
     private(set) var summary: LibrarySummary?
@@ -75,11 +107,41 @@ final class AppModel {
     private(set) var viewError: String?
 
     var selection: Int? {
-        didSet { if selection != oldValue { reopen() } }
+        didSet {
+            guard selection != oldValue else { return }
+            // A different source starts with nothing selected; the same one (after a reload) keeps its tracks.
+            if item(withID: selection)?.node.id != currentNodeID { clearTrackSelection() }
+            reopen()
+        }
     }
     var query = "" {
         didSet { if query != oldValue { scheduleSearch() } }
     }
+    var searchField: SearchField = .all {
+        didSet { if searchField != oldValue && !query.isEmpty { reopen() } }
+    }
+    /// Bumped by the Find command; the search field focuses itself when it changes.
+    private(set) var searchFocusRequests = 0
+
+    private(set) var context: ColumnContext = .collection
+    private(set) var layout: ColumnLayout
+    var keyStyle: KeyStyle {
+        didSet {
+            guard keyStyle != oldValue else { return }
+            layoutStore.defaults.set(keyStyle.rawValue, forKey: "keyStyle")
+            if sortKey == .key || sortKey == .keyCamelot {
+                sortKey = keyStyle == .camelot ? .keyCamelot : .key
+                reopen()
+            }
+        }
+    }
+
+    /// The selected tracks, by id: they survive re-sorting, reloads and page eviction.
+    private(set) var selectedIDs: Set<String> = []
+    private(set) var selectionAnchor: String?
+    private(set) var selectionSummary: SelectionSummary?
+    /// Called for Return or a double-click on a track; the player arrives in a later phase.
+    var onLoadToDeck: (String) -> Void = { _ in }
     private(set) var sortKey: SortKey = .trackNo
     private(set) var descending = false
 
@@ -88,9 +150,16 @@ final class AppModel {
     private var eventTask: Task<Void, Never>?
     private var loadTask: Task<Void, Never>?
     private var started = false
+    private var currentNodeID: String?
+    private var selectionTask: Task<Void, Never>?
+    private var selectionToken = 0
 
-    init(backend: any BackendProtocol) {
+    init(backend: any BackendProtocol, layoutStore: ColumnLayoutStore = ColumnLayoutStore()) {
         self.backend = backend
+        self.layoutStore = layoutStore
+        pager = RowPager(backend: backend)
+        layout = layoutStore.load(.collection)
+        keyStyle = layoutStore.defaults.string(forKey: "keyStyle").flatMap(KeyStyle.init) ?? .classic
     }
 
     /// Starts listening for library events, then loads the library.
@@ -161,10 +230,173 @@ final class AppModel {
         reopen()
     }
 
+    /// A header click: ascending, then descending, then off (the view's own order).
+    func cycleSort(on column: ColumnID) {
+        guard let key = ColumnCatalogue.spec(for: column).sortKey(for: keyStyle) else { return }
+        let next = SortCycle.next(current: (sortKey, descending), clicked: key)
+        sort(by: next.key, descending: next.descending)
+    }
+
+    func focusSearch() { searchFocusRequests += 1 }
+
+    func clearSearch() { query = "" }
+
+    // MARK: Columns
+
+    /// The extra fields rows are fetched with: what the shown columns need, and the size
+    /// (for the selection's total) whatever is shown.
+    var extraColumns: [ExtraColumn] {
+        var wanted = [ExtraColumn.size]
+        for column in layout.extraColumns where !wanted.contains(column) { wanted.append(column) }
+        return wanted
+    }
+
+    func setLayout(_ new: ColumnLayout) {
+        guard new != layout else { return }
+        let before = Set(extraColumns)
+        layout = new
+        layoutStore.save(new, for: context)
+        // New fields need new rows.
+        if Set(extraColumns) != before { reopen() }
+    }
+
+    func toggleColumn(_ id: ColumnID) { setLayout(layout.toggling(id)) }
+
+    func resizeColumn(_ id: ColumnID, to width: Double) { setLayout(layout.resized(id, to: width)) }
+
+    /// The visible columns after a drag-reorder (without `#`).
+    func reorderColumns(_ order: [ColumnID]) {
+        guard Set(order) == Set(layout.order), order.count == layout.order.count else { return }
+        var next = layout
+        next.order = order
+        setLayout(next)
+    }
+
+    func resetColumns() {
+        layoutStore.reset(context)
+        setLayout(.defaults(for: context))
+    }
+
+    // MARK: Selection
+
+    func loadToDeck(trackID: String) { onLoadToDeck(trackID) }
+
+    private func clearTrackSelection() {
+        selectionToken += 1
+        selectionTask?.cancel()
+        selectedIDs = []
+        selectionAnchor = nil
+        selectionSummary = nil
+    }
+
+    /// The table's selection changed to these row indexes. Loaded rows map to ids at once;
+    /// rows in pages that are not loaded (a big shift-click range, Select All) are resolved
+    /// through the backend. With `keepingUnloaded`, selected tracks that are not in any
+    /// loaded page stay selected (an additive click after a reload has only restored the
+    /// visible part of the table's selection).
+    func tableSelectionChanged(_ indexes: IndexSet, keepingUnloaded: Bool) {
+        guard let opened else { return }
+        selectionToken += 1
+        let token = selectionToken
+        selectionTask?.cancel()
+
+        let pageSize = RowPager.pageSize
+        let count = pager.rowCount
+        var ids = Set<String>()
+        var missing: [ClosedRange<Int>] = []
+        for range in indexes.rangeView {
+            var i = range.lowerBound
+            let end = min(range.upperBound, count)
+            while i < end {
+                let page = i / pageSize
+                let pageEnd = min((page + 1) * pageSize, end)
+                if let rows = pager.loadedPage(page) {
+                    for j in i..<pageEnd where j % pageSize < rows.count { ids.insert(rows[j % pageSize].id) }
+                } else if let last = missing.last, last.upperBound + 1 == i {
+                    missing[missing.count - 1] = last.lowerBound...(pageEnd - 1)
+                } else {
+                    missing.append(i...(pageEnd - 1))
+                }
+                i = pageEnd
+            }
+        }
+        if keepingUnloaded {
+            var loaded = Set<String>()
+            pager.forEachLoadedRow { _, row in loaded.insert(row.id) }
+            ids.formUnion(selectedIDs.filter { !loaded.contains($0) })
+        }
+        applySelection(ids, anchoredBy: indexes.count == 1 ? ids.first : nil)
+
+        guard !missing.isEmpty else { return }
+        let backend = backend
+        let viewID = opened.handle.viewId
+        let resolved = ids
+        selectionTask = Task { [weak self] in
+            var all = resolved
+            for range in missing {
+                guard let fetched = try? await backend.viewIDsInRange(
+                    viewID: viewID, from: UInt32(range.lowerBound), to: UInt32(range.upperBound))
+                else { return }
+                all.formUnion(fetched)
+            }
+            guard let self, !Task.isCancelled, token == self.selectionToken else { return }
+            self.applySelection(all, anchoredBy: nil)
+        }
+    }
+
+    /// Waits for the ids of unloaded rows to arrive. For tests.
+    func settleSelection() async { await selectionTask?.value }
+
+    private func applySelection(_ ids: Set<String>, anchoredBy anchor: String?) {
+        selectedIDs = ids
+        if let anchor { selectionAnchor = anchor } else if let current = selectionAnchor, !ids.contains(current) {
+            selectionAnchor = ids.first
+        } else if selectionAnchor == nil {
+            selectionAnchor = ids.first
+        }
+        recomputeSelectionSummary()
+    }
+
+    /// Totals the selected tracks that are in loaded pages. Call again when pages load.
+    func recomputeSelectionSummary() {
+        guard selectedIDs.count > 1 else {
+            selectionSummary = nil
+            return
+        }
+        var seconds: UInt64 = 0
+        var bytes: UInt64 = 0
+        var found = 0
+        let selected = selectedIDs
+        pager.forEachLoadedRow { _, row in
+            guard selected.contains(row.id) else { return }
+            found += 1
+            seconds += UInt64(row.durationSec)
+            bytes += row.extra.size ?? 0
+        }
+        let summary = SelectionSummary(count: selected.count, seconds: seconds, bytes: bytes, totalled: found)
+        if summary != selectionSummary { selectionSummary = summary }
+    }
+
+    /// The row indexes in `range` whose tracks are selected, for restoring the table's
+    /// selection as pages load.
+    func selectedIndexes(in range: Range<Int>) -> IndexSet {
+        var found = IndexSet()
+        guard !selectedIDs.isEmpty, !range.isEmpty else { return found }
+        let pageSize = RowPager.pageSize
+        for page in (range.lowerBound / pageSize)...((range.upperBound - 1) / pageSize) {
+            guard let rows = pager.loadedPage(page) else { continue }
+            for (offset, row) in rows.enumerated() where selectedIDs.contains(row.id) {
+                let index = page * pageSize + offset
+                if range.contains(index) { found.insert(index) }
+            }
+        }
+        return found
+    }
+
     private func scheduleSearch() {
         searchTask?.cancel()
         searchTask = Task {
-            try? await Task.sleep(for: .milliseconds(250))
+            try? await Task.sleep(for: .milliseconds(200))
             guard !Task.isCancelled else { return }
             reopen()
         }
@@ -183,17 +415,28 @@ final class AppModel {
 
     /// Reopens the selected node as a view with the current sort and query.
     func reopen() {
-        guard let source = item(withID: selection)?.source else { return }
+        guard let node = item(withID: selection), let source = node.source else { return }
+        currentNodeID = node.node.id
+        let newContext = ColumnContext(source)
+        if newContext != context {
+            context = newContext
+            layout = layoutStore.load(newContext)
+        }
         generation += 1
         let mine = generation
-        let spec = ViewSpec(source: source, sort: sortKey, descending: descending, query: query)
+        let extra = extraColumns
+        let spec = ViewSpec(
+            source: source, sort: sortKey, descending: descending, query: query, searchField: searchField)
         let backend = backend
         Task {
             do {
                 let handle = try await backend.openView(spec)
                 guard mine == generation else { return }  // a newer request superseded this one
                 viewError = nil
-                opened = OpenedView(handle: handle, generation: mine)
+                let view = OpenedView(handle: handle, generation: mine, extraColumns: extra)
+                opened = view
+                pager.show(view)
+                recomputeSelectionSummary()
             } catch {
                 guard mine == generation else { return }
                 viewError = describe(error)

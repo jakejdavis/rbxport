@@ -4,6 +4,8 @@ import Foundation
 struct OpenedView: Equatable, Sendable {
     let handle: ViewHandle
     let generation: Int
+    /// The optional fields the rows are fetched with (the shown extra columns, plus `.size`).
+    var extraColumns: [ExtraColumn] = []
 }
 
 /// Lazily loads and caches pages of rows for the open view. The table asks for
@@ -56,6 +58,29 @@ final class RowPager {
         return nil
     }
 
+    /// The row at `index` if its page is already loaded. Never starts a load.
+    func peek(at index: Int) -> Row? {
+        guard let opened, index >= 0, index < rowCount else { return nil }
+        let key = PageKey(viewID: opened.handle.viewId, page: index / Self.pageSize)
+        guard let page = pages[key] else { return nil }
+        let i = index % Self.pageSize
+        return i < page.count ? page[i] : nil
+    }
+
+    /// The loaded rows of page `page` (`index / pageSize`), or nil while it is not loaded.
+    func loadedPage(_ page: Int) -> [Row]? {
+        guard let opened else { return nil }
+        return pages[PageKey(viewID: opened.handle.viewId, page: page)]
+    }
+
+    /// Visits every loaded row with its index in the view.
+    func forEachLoadedRow(_ body: (Int, Row) -> Void) {
+        for (key, rows) in pages {
+            let first = key.page * Self.pageSize
+            for (offset, row) in rows.enumerated() { body(first + offset, row) }
+        }
+    }
+
     /// Waits for every page load in flight.
     func settle() async {
         while let task = loading.values.first {
@@ -67,9 +92,10 @@ final class RowPager {
         guard loading[key] == nil else { return }
         let backend = backend
         let offset = UInt32(key.page * Self.pageSize)
+        let extra = opened?.extraColumns ?? []
         loading[key] = Task { [weak self] in
             let rows = try? await backend.fetchRows(
-                viewID: key.viewID, offset: offset, len: UInt32(Self.pageSize))
+                viewID: key.viewID, offset: offset, len: UInt32(Self.pageSize), extraColumns: extra)
             guard let self else { return }
             self.finish(key, rows: rows)
         }

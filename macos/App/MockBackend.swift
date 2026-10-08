@@ -13,6 +13,8 @@ actor MockBackend: BackendProtocol {
     private var generation: UInt32 = 1
 
     private(set) var fetchCalls: [(viewID: UInt32, offset: UInt32, len: UInt32)] = []
+    private(set) var fetchExtras: [[ExtraColumn]] = []
+    private(set) var idRangeCalls: [(viewID: UInt32, from: UInt32, to: UInt32)] = []
     private(set) var openedSpecs: [ViewSpec] = []
     private(set) var treeCalls = 0
 
@@ -78,23 +80,45 @@ actor MockBackend: BackendProtocol {
         return ViewHandle(viewId: id, len: UInt32(order.count), generation: generation)
     }
 
-    func fetchRows(viewID: UInt32, offset: UInt32, len: UInt32) async throws -> [Row] {
+    func fetchRows(viewID: UInt32, offset: UInt32, len: UInt32, extraColumns: [ExtraColumn]) async throws -> [Row] {
         fetchCalls.append((viewID, offset, len))
+        fetchExtras.append(extraColumns)
         guard let view = views[viewID] else {
             throw FfiError.NotFound(message: "view \(viewID) is gone", detail: nil)
         }
         let start = min(Int(offset), view.titles.count)
         let end = min(start + Int(len), view.titles.count)
-        return (start..<end).map { Self.row(track: view.titles[$0], position: $0 + 1) }
+        return (start..<end).map { Self.row(track: view.titles[$0], position: $0 + 1, extra: extraColumns) }
+    }
+
+    func viewIDsInRange(viewID: UInt32, from: UInt32, to: UInt32) async throws -> [String] {
+        idRangeCalls.append((viewID, from, to))
+        guard let view = views[viewID] else {
+            throw FfiError.NotFound(message: "view \(viewID) is gone", detail: nil)
+        }
+        guard !view.titles.isEmpty else { return [] }
+        let lo = min(Int(from), Int(to))
+        let hi = min(max(Int(from), Int(to)), view.titles.count - 1)
+        guard lo <= hi else { return [] }
+        return (lo...hi).map { String(view.titles[$0] + 1) }
     }
 
     static func title(_ n: Int) -> String { String(format: "Track %03d", n) }
 
-    static func row(track n: Int, position: Int) -> Row {
-        Row(
+    /// Each track is 3 minutes 20 seconds and 1 MB (+ its number in KB) when `.size` is asked for.
+    static func row(track n: Int, position: Int, extra columns: [ExtraColumn] = []) -> Row {
+        var extra = ExtraFields(
+            size: nil, discNo: nil, albumArtist: nil, composer: nil, lyricist: nil, fileType: nil, year: nil,
+            mixName: nil, remixer: nil, originalArtist: nil, sampleRate: nil, bitrate: nil, bitDepth: nil,
+            location: nil, dateCreated: nil, publishTrackInfo: nil, message: nil, color: nil, djPlayCount: nil,
+            myTag: nil, trackNumber: nil, cloud: nil)
+        if columns.contains(.size) { extra.size = 1_000_000 + UInt64(n) * 1_000 }
+        if columns.contains(.composer) { extra.composer = "Composer \(n % 3)" }
+        return Row(
             id: String(n + 1), trackNo: UInt32(position), title: title(n), artist: "Artist \(n % 7)",
             album: "Album", genre: "House", label: "", comment: "", bpmX100: 12_000 + UInt32(n),
             key: "8A", durationSec: 200, rating: UInt8(n % 6), analysed: 1, dateAdded: "2026-01-01",
-            releaseDate: "", hotCues: [], memoryCues: [], artworkHue: 0, hasArtwork: false, fileName: "")
+            releaseDate: "", hotCues: [], memoryCues: [], artworkHue: 0, hasArtwork: false, fileName: "",
+            extra: extra)
     }
 }

@@ -1,5 +1,7 @@
 import Foundation
 
+@testable import rbxport
+
 /// Polls until `condition` holds, or fails after `timeout`. Returns whether it held.
 @MainActor
 func eventually(timeout: Duration = .seconds(5), _ condition: @MainActor () -> Bool) async -> Bool {
@@ -9,4 +11,12 @@ func eventually(timeout: Duration = .seconds(5), _ condition: @MainActor () -> B
         try? await Task.sleep(for: .milliseconds(10))
     }
     return condition()
+}
+
+/// A layout store over a throwaway `UserDefaults` suite, so tests never touch real preferences.
+func isolatedStore() -> ColumnLayoutStore {
+    let suite = "rbxport-tests-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defaults.removePersistentDomain(forName: suite)
+    return ColumnLayoutStore(defaults: defaults)
 }

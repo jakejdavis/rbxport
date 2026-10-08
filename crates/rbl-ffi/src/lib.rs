@@ -22,7 +22,8 @@ pub use crate::core::Core;
 pub use error::FfiError;
 pub use events::{EventListener, LibraryEvent};
 pub use types::{
-    EditHistory, HotCue, LibraryProblem, LibrarySummary, LoadOutcome, NodeKind, Row, SortKey,
+    EditHistory, ExtraColumn, ExtraFields, HotCue, LibraryProblem, LibrarySummary, LoadOutcome, NodeKind, Row,
+    SearchField, SortKey,
     TrackSource, TreeNode, ViewHandle, ViewSpec,
 };
 

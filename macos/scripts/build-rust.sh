@@ -12,6 +12,10 @@ TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 # Xcode runs script phases with a minimal PATH.
 export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
+# Match the app's deployment target so the C dependencies (SQLCipher, OpenSSL) do
+# not warn that they were "built for newer macOS" when linked.
+export MACOSX_DEPLOYMENT_TARGET=15.0
+
 FLAGS=()
 DIR=debug
 if [ "$PROFILE" = "release" ]; then FLAGS+=(--release); DIR=release; fi

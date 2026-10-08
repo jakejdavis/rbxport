@@ -23,9 +23,9 @@ struct BridgeIntegrationTests {
         #expect(tree.first?.kind == .allTracks)
 
         let view = try await backend.openView(
-            ViewSpec(source: .collection, sort: .title, descending: true, query: ""))
+            ViewSpec(source: .collection, sort: .title, descending: true, query: "", searchField: .all))
         #expect(view.len == 40)
-        let rows = try await backend.fetchRows(viewID: view.viewId, offset: 0, len: 5)
+        let rows = try await backend.fetchRows(viewID: view.viewId, offset: 0, len: 5, extraColumns: [])
         #expect(rows.first?.title == "Track 039")
         #expect(rows.count == 5)
     }
@@ -36,7 +36,7 @@ struct BridgeIntegrationTests {
         let backend = Backend(fixtureDir: dir)
         _ = await backend.loadLibrary()
         await #expect(throws: FfiError.self) {
-            _ = try await backend.fetchRows(viewID: 9999, offset: 0, len: 1)
+            _ = try await backend.fetchRows(viewID: 9999, offset: 0, len: 1, extraColumns: [])
         }
     }
 }
