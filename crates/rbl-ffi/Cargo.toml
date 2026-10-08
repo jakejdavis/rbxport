@@ -1,0 +1,33 @@
+[package]
+name = "rbl-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "UniFFI bridge exposing the library index to the native macOS front end."
+
+[lib]
+name = "rbl_ffi"
+crate-type = ["staticlib", "lib"]
+
+[lints]
+workspace = true
+
+[features]
+# Only the `uniffi-bindgen` binary needs the generator.
+cli = ["uniffi/cli"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[dependencies]
+rbl-anlz = { path = "../rbl-anlz" }
+rbl-db = { path = "../rbl-db" }
+rbl-index = { path = "../rbl-index" }
+thiserror = { workspace = true }
+uniffi = "0.32"
+
+[dev-dependencies]
+tempfile = "3"
