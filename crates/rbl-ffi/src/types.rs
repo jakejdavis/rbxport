@@ -86,12 +86,90 @@ pub enum SortKey {
     Message,
 }
 
+/// Which field a search query matches. `All` searches every field.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, uniffi::Enum)]
+pub enum SearchField {
+    #[default]
+    All,
+    Title,
+    Artist,
+    Album,
+    Genre,
+    Year,
+    Bpm,
+    Composer,
+    AlbumArtist,
+    Remixer,
+    Label,
+    Comment,
+    OriginalArtist,
+    MixName,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct ViewSpec {
     pub source: TrackSource,
     pub sort: SortKey,
     pub descending: bool,
     pub query: String,
+    pub search_field: SearchField,
+}
+
+/// The columns `fetch_rows` fills in only when asked: each costs a database
+/// read per row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Enum)]
+pub enum ExtraColumn {
+    Size,
+    DiscNo,
+    AlbumArtist,
+    Composer,
+    Lyricist,
+    FileType,
+    Year,
+    MixName,
+    Remixer,
+    OriginalArtist,
+    SampleRate,
+    Bitrate,
+    BitDepth,
+    Location,
+    DateCreated,
+    PublishTrackInfo,
+    Message,
+    Color,
+    DjPlayCount,
+    MyTag,
+    TrackNumber,
+    Cloud,
+}
+
+/// The values of the requested [`ExtraColumn`]s; the rest stay `None`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, uniffi::Record)]
+pub struct ExtraFields {
+    pub size: Option<u64>,
+    pub disc_no: Option<u32>,
+    pub album_artist: Option<String>,
+    pub composer: Option<String>,
+    pub lyricist: Option<String>,
+    /// rekordbox's file type code.
+    pub file_type: Option<u32>,
+    pub year: Option<u32>,
+    pub mix_name: Option<String>,
+    pub remixer: Option<String>,
+    pub original_artist: Option<String>,
+    pub sample_rate: Option<u32>,
+    pub bitrate: Option<u32>,
+    pub bit_depth: Option<u32>,
+    pub location: Option<String>,
+    pub date_created: Option<String>,
+    pub publish_track_info: Option<bool>,
+    pub message: Option<String>,
+    /// 1 to 8, 0 for none.
+    pub color: Option<u8>,
+    pub dj_play_count: Option<u32>,
+    pub my_tag: Option<String>,
+    pub track_number: Option<u32>,
+    pub cloud: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -133,6 +211,8 @@ pub struct Row {
     pub artwork_hue: u16,
     pub has_artwork: bool,
     pub file_name: String,
+    /// Filled for the columns asked of `fetch_rows`.
+    pub extra: ExtraFields,
 }
 
 /// Why the library did not load.

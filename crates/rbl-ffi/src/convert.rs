@@ -9,7 +9,7 @@ use rbl_app::AppEvent;
 
 use crate::events::LibraryEvent;
 use crate::types::{
-    EditHistory, HotCue, LibraryProblem, LibrarySummary, LoadOutcome, NodeKind, Row, SortKey,
+    EditHistory, ExtraColumn, ExtraFields, HotCue, LibraryProblem, LibrarySummary, LoadOutcome, NodeKind, Row, SearchField, SortKey,
     TrackSource, TreeNode, ViewHandle, ViewSpec,
 };
 
@@ -56,6 +56,90 @@ impl SortKey {
     }
 }
 
+impl From<SearchField> for rbl_index::SearchField {
+    fn from(field: SearchField) -> Self {
+        match field {
+            SearchField::All => Self::All,
+            SearchField::Title => Self::Title,
+            SearchField::Artist => Self::Artist,
+            SearchField::Album => Self::Album,
+            SearchField::Genre => Self::Genre,
+            SearchField::Year => Self::Year,
+            SearchField::Bpm => Self::Bpm,
+            SearchField::Composer => Self::Composer,
+            SearchField::AlbumArtist => Self::AlbumArtist,
+            SearchField::Remixer => Self::Remixer,
+            SearchField::Label => Self::Label,
+            SearchField::Comment => Self::Comment,
+            SearchField::OriginalArtist => Self::OriginalArtist,
+            SearchField::MixName => Self::MixName,
+        }
+    }
+}
+
+impl ExtraColumn {
+    /// The name the core's `enrich_rows` accepts.
+    pub(crate) fn wire(self) -> &'static str {
+        match self {
+            Self::Size => "size",
+            Self::DiscNo => "discNo",
+            Self::AlbumArtist => "albumArtist",
+            Self::Composer => "composer",
+            Self::Lyricist => "lyricist",
+            Self::FileType => "fileType",
+            Self::Year => "year",
+            Self::MixName => "mixName",
+            Self::Remixer => "remixer",
+            Self::OriginalArtist => "originalArtist",
+            Self::SampleRate => "sampleRate",
+            Self::Bitrate => "bitrate",
+            Self::BitDepth => "bitDepth",
+            Self::Location => "location",
+            Self::DateCreated => "dateCreated",
+            Self::PublishTrackInfo => "publishTrackInfo",
+            Self::Message => "message",
+            Self::Color => "color",
+            Self::DjPlayCount => "djPlayCount",
+            Self::MyTag => "myTag",
+            Self::TrackNumber => "trackNumber",
+            Self::Cloud => "cloud",
+        }
+    }
+}
+
+/// The core's JSON map of extra values, as typed fields.
+fn extra_fields(map: Option<serde_json::Map<String, serde_json::Value>>) -> ExtraFields {
+    let Some(map) = map else { return ExtraFields::default() };
+    let text = |key: &str| map.get(key).and_then(|v| v.as_str()).map(str::to_owned);
+    let number = |key: &str| map.get(key).and_then(serde_json::Value::as_u64);
+    let small = |key: &str| number(key).map(|n| u32::try_from(n).unwrap_or(u32::MAX));
+    let flag = |key: &str| map.get(key).and_then(serde_json::Value::as_bool);
+    ExtraFields {
+        size: number("size"),
+        disc_no: small("discNo"),
+        album_artist: text("albumArtist"),
+        composer: text("composer"),
+        lyricist: text("lyricist"),
+        file_type: small("fileType"),
+        year: small("year"),
+        mix_name: text("mixName"),
+        remixer: text("remixer"),
+        original_artist: text("originalArtist"),
+        sample_rate: small("sampleRate"),
+        bitrate: small("bitrate"),
+        bit_depth: small("bitDepth"),
+        location: text("location"),
+        date_created: text("dateCreated"),
+        publish_track_info: flag("publishTrackInfo"),
+        message: text("message"),
+        color: number("color").map(|n| u8::try_from(n).unwrap_or(0)),
+        dj_play_count: small("djPlayCount"),
+        my_tag: text("myTag"),
+        track_number: small("trackNumber"),
+        cloud: flag("cloud"),
+    }
+}
+
 impl From<TrackSource> for TrackSourceDto {
     fn from(source: TrackSource) -> Self {
         match source {
@@ -76,7 +160,7 @@ impl From<ViewSpec> for ViewSpecDto {
             sort: spec.sort.wire().to_owned(),
             descending: spec.descending,
             query: spec.query,
-            search_field: rbl_index::SearchField::default(),
+            search_field: spec.search_field.into(),
             filter: rbl_app::dto::TrackFilterDto::default(),
         }
     }
@@ -152,6 +236,7 @@ impl From<RowDto> for Row {
             artwork_hue: r.artwork_hue,
             has_artwork: r.has_artwork,
             file_name: r.file_name,
+            extra: extra_fields(r.extra),
         }
     }
 }

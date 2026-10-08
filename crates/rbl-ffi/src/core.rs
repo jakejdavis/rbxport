@@ -14,7 +14,7 @@ use rbl_db::{Library as Db, LibraryLocation, OpenMode};
 use crate::error::FfiError;
 use crate::events::{EventListener, ListenerSink};
 use crate::types::{
-    LibraryProblem, LibrarySummary, LoadOutcome, Row, TreeNode, ViewHandle, ViewSpec,
+    ExtraColumn, LibraryProblem, LibrarySummary, LoadOutcome, Row, TreeNode, ViewHandle, ViewSpec,
 };
 
 /// Where `load_library` gets the library from.
@@ -126,8 +126,16 @@ impl Core {
         ffi("open_view", || browse::open_view(&self.state, &spec.into())).map(Into::into)
     }
 
-    pub fn fetch_rows(&self, view_id: u32, offset: u32, len: u32) -> Result<Vec<Row>, FfiError> {
-        ffi("fetch_rows", || browse::fetch_rows(&self.state, view_id, offset, len, &[]))
+    /// One page of rows. `extra_columns` names the optional fields to fill in.
+    pub fn fetch_rows(
+        &self,
+        view_id: u32,
+        offset: u32,
+        len: u32,
+        extra_columns: Vec<ExtraColumn>,
+    ) -> Result<Vec<Row>, FfiError> {
+        let wanted: Vec<String> = extra_columns.iter().map(|c| c.wire().to_owned()).collect();
+        ffi("fetch_rows", || browse::fetch_rows(&self.state, view_id, offset, len, &wanted))
             .map(|rows| rows.into_iter().map(Into::into).collect())
     }
 

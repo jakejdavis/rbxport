@@ -28,7 +28,15 @@ struct ContentView: View {
             } detail: {
                 DetailView()
             }
-            .searchable(text: $model.query, placement: .toolbar, prompt: "Search")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    SearchFieldView(
+                        model: model, query: model.query, scope: model.searchField,
+                        focusRequests: model.searchFocusRequests
+                    )
+                    .frame(width: 240)
+                }
+            }
         }
     }
 }
@@ -52,10 +60,8 @@ struct DetailView: View {
         VStack(spacing: 0) {
             if let opened = model.opened {
                 TrackTable(
-                    backend: model.backend,
-                    opened: opened,
-                    onSort: { key, descending in model.sort(by: key, descending: descending) }
-                )
+                    model: model, opened: opened, layout: model.layout, keyStyle: model.keyStyle,
+                    sortKey: model.sortKey, descending: model.descending)
             } else {
                 Spacer()
             }
@@ -82,6 +88,9 @@ struct StatusLine: View {
                 Text("Loaded in \(s.loadMs) ms")
             }
             Spacer()
+            if let summary = model.selectionSummary {
+                Text(summary.text)
+            }
             if let opened = model.opened {
                 Text("Showing \(opened.handle.len)")
             }

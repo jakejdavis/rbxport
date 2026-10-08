@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 
 use rbl_db::fixture::playlist_id;
 use rbl_ffi::{
-    Core, EventListener, FfiError, LibraryEvent, LoadOutcome, NodeKind, SortKey, TrackSource, ViewSpec,
-    MAX_ROWS,
+    Core, EventListener, ExtraColumn, FfiError, LibraryEvent, LoadOutcome, NodeKind, SearchField, SortKey,
+    TrackSource, ViewSpec, MAX_ROWS,
 };
 
 #[derive(Default)]
@@ -26,7 +26,7 @@ fn core() -> (tempfile::TempDir, Arc<Core>, Arc<Recorder>) {
 }
 
 fn spec(source: TrackSource, sort: SortKey, descending: bool, query: &str) -> ViewSpec {
-    ViewSpec { source, sort, descending, query: query.into() }
+    ViewSpec { source, sort, descending, query: query.into(), search_field: SearchField::All }
 }
 
 #[test]
@@ -69,17 +69,17 @@ fn collection_pages_sorts_and_searches() {
     let (_dir, core, _) = core();
     let view = core.open_view(spec(TrackSource::Collection, SortKey::Title, false, "")).unwrap();
     assert_eq!(view.len, 40);
-    let first = core.fetch_rows(view.view_id, 0, 10).unwrap();
-    let second = core.fetch_rows(view.view_id, 10, 10).unwrap();
+    let first = core.fetch_rows(view.view_id, 0, 10, vec![]).unwrap();
+    let second = core.fetch_rows(view.view_id, 10, 10, vec![]).unwrap();
     assert_eq!((first.len(), second.len()), (10, 10));
     assert_eq!(first[0].title, "Track 000");
     assert_eq!(second[0].title, "Track 010");
     assert_eq!(second[0].track_no, 11);
-    assert_eq!(core.fetch_rows(view.view_id, 35, 20).unwrap().len(), 5);
-    assert!(core.fetch_rows(view.view_id, 99, 20).unwrap().is_empty());
+    assert_eq!(core.fetch_rows(view.view_id, 35, 20, vec![]).unwrap().len(), 5);
+    assert!(core.fetch_rows(view.view_id, 99, 20, vec![]).unwrap().is_empty());
 
     let desc = core.open_view(spec(TrackSource::Collection, SortKey::Title, true, "")).unwrap();
-    assert_eq!(core.fetch_rows(desc.view_id, 0, 1).unwrap()[0].title, "Track 039");
+    assert_eq!(core.fetch_rows(desc.view_id, 0, 1, vec![]).unwrap()[0].title, "Track 039");
 
     let found = core.open_view(spec(TrackSource::Collection, SortKey::Title, false, "039")).unwrap();
     assert_eq!(found.len, 1);
@@ -112,8 +112,8 @@ fn playlist_and_history_sources_open() {
 fn len_is_capped() {
     let (_dir, core, _) = core();
     let view = core.open_view(spec(TrackSource::Collection, SortKey::TrackNo, false, "")).unwrap();
-    assert!(core.fetch_rows(view.view_id, 0, MAX_ROWS).is_ok());
-    assert!(matches!(core.fetch_rows(view.view_id, 0, MAX_ROWS + 1), Err(FfiError::Malformed { .. })));
+    assert!(core.fetch_rows(view.view_id, 0, MAX_ROWS, vec![]).is_ok());
+    assert!(matches!(core.fetch_rows(view.view_id, 0, MAX_ROWS + 1, vec![]), Err(FfiError::Malformed { .. })));
 }
 
 #[test]
@@ -123,5 +123,40 @@ fn old_views_are_evicted() {
     for _ in 0..16 {
         core.open_view(spec(TrackSource::Collection, SortKey::TrackNo, false, "")).unwrap();
     }
-    assert!(matches!(core.fetch_rows(first.view_id, 0, 1), Err(FfiError::NotFound { .. })));
+    assert!(matches!(core.fetch_rows(first.view_id, 0, 1, vec![]), Err(FfiError::NotFound { .. })));
+}
+
+#[test]
+fn rows_carry_extra_columns_only_when_asked() {
+    let (_dir, core, _) = core();
+    let view = core.open_view(spec(TrackSource::Collection, SortKey::TrackNo, false, "")).unwrap();
+    let plain = core.fetch_rows(view.view_id, 0, 3, vec![]).unwrap();
+    assert!(plain.iter().all(|r| r.extra == rbl_ffi::ExtraFields::default()));
+
+    let rows = core
+        .fetch_rows(view.view_id, 0, 3, vec![ExtraColumn::Size, ExtraColumn::Location, ExtraColumn::Cloud, ExtraColumn::Color])
+        .unwrap();
+    assert_eq!(rows.len(), 3);
+    for row in &rows {
+        assert!(row.extra.size.is_some());
+        assert!(row.extra.location.is_some());
+        assert!(row.extra.cloud.is_some());
+        assert!(row.extra.color.is_some());
+        // Not requested: stays empty.
+        assert!(row.extra.composer.is_none());
+        assert!(row.extra.bitrate.is_none());
+    }
+}
+
+#[test]
+fn search_field_scopes_the_query() {
+    let (_dir, core, _) = core();
+    let by = |field: SearchField, query: &str| {
+        let spec = ViewSpec { search_field: field, ..spec(TrackSource::Collection, SortKey::Title, false, query) };
+        core.open_view(spec).unwrap().len
+    };
+    assert_eq!(by(SearchField::Title, "Track 039"), 1);
+    assert_eq!(by(SearchField::Title, "Track"), 40);
+    assert_eq!(by(SearchField::Artist, "Track"), 0);
+    assert_eq!(by(SearchField::All, "Track"), 40);
 }

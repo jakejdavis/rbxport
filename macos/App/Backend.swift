@@ -11,7 +11,9 @@ protocol BackendProtocol: Sendable {
     func summary() async throws -> LibrarySummary
     func playlistTree() async throws -> [TreeNode]
     func openView(_ spec: ViewSpec) async throws -> ViewHandle
-    func fetchRows(viewID: UInt32, offset: UInt32, len: UInt32) async throws -> [Row]
+    func fetchRows(viewID: UInt32, offset: UInt32, len: UInt32, extraColumns: [ExtraColumn]) async throws -> [Row]
+    /// Track ids at positions `from...to` (inclusive) of a view, in view order.
+    func viewIDsInRange(viewID: UInt32, from: UInt32, to: UInt32) async throws -> [String]
 }
 
 /// Forwards the Rust core's callbacks into an `AsyncStream`.
@@ -62,8 +64,11 @@ actor Backend: BackendProtocol {
     func summary() async throws -> LibrarySummary { try core.summary() }
     func playlistTree() async throws -> [TreeNode] { try core.playlistTree() }
     func openView(_ spec: ViewSpec) async throws -> ViewHandle { try core.openView(spec: spec) }
-    func fetchRows(viewID: UInt32, offset: UInt32, len: UInt32) async throws -> [Row] {
-        try core.fetchRows(viewId: viewID, offset: offset, len: len)
+    func fetchRows(viewID: UInt32, offset: UInt32, len: UInt32, extraColumns: [ExtraColumn]) async throws -> [Row] {
+        try core.fetchRows(viewId: viewID, offset: offset, len: len, extraColumns: extraColumns)
+    }
+    func viewIDsInRange(viewID: UInt32, from: UInt32, to: UInt32) async throws -> [String] {
+        try core.viewIdsInRange(viewId: viewID, from: from, to: to)
     }
 }
 
