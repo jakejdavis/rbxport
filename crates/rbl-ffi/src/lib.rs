@@ -1,31 +1,32 @@
-//! The bridge between the Rust library index and the native macOS front end.
+//! The bridge between the Rust application core and the native macOS front end.
 //!
-//! A small, self-contained mirror of the Tauri command layer's `library_summary`,
-//! `playlist_tree`, `open_view` and `fetch_rows`, shaped so `UniFFI` can express
-//! it: records instead of tuples, enums instead of `&'static str`, no JSON.
+//! A thin `UniFFI` layer over `rbl-app`: it holds an `Arc<AppState>`, calls the
+//! core's browse and startup functions, and converts their DTOs into records
+//! and enums Swift can use (no JSON, no stringly kinds). All logic lives in
+//! `rbl-app`; the only code here is conversion.
 //!
-//! The library is only ever opened read-only. Nothing here calls a write API.
+//! The installed library is only ever opened read-only, and so are fixtures.
 
 // UniFFI's generated scaffolding is `unsafe` (extern "C" entry points); the
 // workspace denies it, and `lints.workspace = true` cannot be partly overridden
 // in the manifest. Every line of hand-written code here stays safe.
 #![allow(unsafe_code)]
 
+mod convert;
+mod core;
 mod error;
-mod handle;
-mod tree;
+mod events;
 mod types;
-mod views;
 
+pub use crate::core::Core;
 pub use error::FfiError;
-pub use handle::LibraryHandle;
+pub use events::{EventListener, LibraryEvent};
 pub use types::{
-    HotCue, LibrarySummary, NodeKind, Row, TrackSource, TreeNode, ViewHandle, ViewSpec,
+    EditHistory, HotCue, LibraryProblem, LibrarySummary, LoadOutcome, NodeKind, Row, SortKey,
+    TrackSource, TreeNode, ViewHandle, ViewSpec,
 };
 
 uniffi::setup_scaffolding!();
 
-/// The most rows one `fetch_rows` call returns, as in the command layer.
-pub const MAX_ROWS: u32 = 128;
-/// How many views a handle keeps open before the least recently used goes.
-pub const MAX_VIEWS: usize = 16;
+/// The most rows one `fetch_rows` call returns (the core's cap).
+pub const MAX_ROWS: u32 = rbl_app::browse::MAX_ROWS;

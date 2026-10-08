@@ -41,11 +41,26 @@ targets:
         INFOPLIST_KEY_NSHumanReadableCopyright: GPL-2.0-or-later
         ENABLE_HARDENED_RUNTIME: NO
         # Static Rust library: SQLCipher/OpenSSL/sysinfo need these.
-        OTHER_LDFLAGS: "-lc++ -framework Security -framework CoreFoundation -framework SystemConfiguration -framework IOKit"
+        OTHER_LDFLAGS: "-lc++ -framework Security -framework CoreFoundation -framework SystemConfiguration -framework IOKit -framework CoreMIDI -framework CoreAudio -framework AudioToolbox"
+  rbxportTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: rbxport
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.rbxport.native.tests
 schemes:
   rbxport:
     build:
       targets:
         rbxport: all
+    test:
+      config: Debug
+      targets:
+        - rbxportTests
     run:
       config: Debug

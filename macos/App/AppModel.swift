@@ -58,22 +58,17 @@ struct TreeItem: Identifiable, Hashable, Sendable {
     }
 }
 
-/// What the table needs to show one opened view.
-struct OpenedView: Equatable, Sendable {
-    let handle: ViewHandle
-    let generation: Int
-}
-
 @MainActor @Observable
 final class AppModel {
-    enum Phase {
+    enum Phase: Equatable {
         case loading
         case ready
         case failed(String)
     }
 
+    let backend: any BackendProtocol
+
     private(set) var phase: Phase = .loading
-    private(set) var library: LibraryHandle?
     private(set) var summary: LibrarySummary?
     private(set) var tree: [TreeItem] = []
     private(set) var opened: OpenedView?
@@ -85,36 +80,81 @@ final class AppModel {
     var query = "" {
         didSet { if query != oldValue { scheduleSearch() } }
     }
-    private(set) var sortKey = "trackNo"
+    private(set) var sortKey: SortKey = .trackNo
     private(set) var descending = false
 
     private var generation = 0
     private var searchTask: Task<Void, Never>?
+    private var eventTask: Task<Void, Never>?
+    private var loadTask: Task<Void, Never>?
     private var started = false
 
+    init(backend: any BackendProtocol) {
+        self.backend = backend
+    }
+
+    /// Starts listening for library events, then loads the library.
     func start() {
         guard !started else { return }
         started = true
         phase = .loading
-        Task {
-            do {
-                // Opening decrypts and indexes the whole library: off the main actor.
-                let loaded = try await Task.detached(priority: .userInitiated) {
-                    let handle = try LibraryHandle.openInstalled()
-                    return (handle, handle.summary(), handle.playlistTree())
-                }.value
-                library = loaded.0
-                summary = loaded.1
-                tree = TreeItem.hierarchy(from: loaded.2)
-                phase = .ready
-                selection = 0
-            } catch {
-                phase = .failed(Self.describe(error))
+        let backend = backend
+        eventTask = Task { [weak self] in
+            for await event in backend.events {
+                guard let self else { return }
+                await self.handle(event)
             }
+        }
+        // Loading decrypts and indexes the whole library: the backend runs it off the main actor.
+        loadTask = Task { _ = await backend.loadLibrary() }
+    }
+
+    /// Waits for the initial load and the events it raised to be handled. For tests.
+    func waitUntilSettled() async {
+        await loadTask?.value
+        // Events are handled in order on `eventTask`; give it a turn to drain.
+        for _ in 0..<20 { await Task.yield() }
+    }
+
+    func handle(_ event: LibraryEvent) async {
+        switch event {
+        case .libraryReady:
+            await refresh(selectFirst: true)
+        case .libraryChanged:
+            // View ids died with the old generation: reload the tree and reopen the selection.
+            await refresh(selectFirst: false)
+        case .libraryProblem(let problem):
+            switch problem {
+            case .failed(let message): phase = .failed(message)
+            case .missing(let masterDb): phase = .failed("No rekordbox library found at \(masterDb).")
+            }
+        case .tagListChanged, .editHistoryChanged:
+            break
         }
     }
 
-    func sort(by key: String, descending: Bool) {
+    private func refresh(selectFirst: Bool) async {
+        do {
+            async let loadedSummary = backend.summary()
+            async let loadedTree = backend.playlistTree()
+            let (newSummary, flat) = try await (loadedSummary, loadedTree)
+            let keptNodeID = item(withID: selection)?.node.id
+            summary = newSummary
+            tree = TreeItem.hierarchy(from: flat)
+            phase = .ready
+            let kept = keptNodeID.flatMap { id in flat.firstIndex { $0.id == id } }
+            let newSelection = kept ?? (selectFirst || selection != nil ? 0 : nil)
+            if newSelection == selection {
+                reopen()
+            } else {
+                selection = newSelection  // reopens
+            }
+        } catch {
+            phase = .failed(describe(error))
+        }
+    }
+
+    func sort(by key: SortKey, descending: Bool) {
         guard key != sortKey || descending != self.descending else { return }
         sortKey = key
         self.descending = descending
@@ -141,33 +181,23 @@ final class AppModel {
         return find(tree)
     }
 
-    private func reopen() {
-        guard let library else { return }
+    /// Reopens the selected node as a view with the current sort and query.
+    func reopen() {
         guard let source = item(withID: selection)?.source else { return }
         generation += 1
         let mine = generation
         let spec = ViewSpec(source: source, sort: sortKey, descending: descending, query: query)
+        let backend = backend
         Task {
             do {
-                let handle = try await Task.detached(priority: .userInitiated) {
-                    try library.openView(spec: spec)
-                }.value
+                let handle = try await backend.openView(spec)
                 guard mine == generation else { return }  // a newer request superseded this one
                 viewError = nil
                 opened = OpenedView(handle: handle, generation: mine)
             } catch {
                 guard mine == generation else { return }
-                viewError = Self.describe(error)
+                viewError = describe(error)
             }
         }
-    }
-
-    nonisolated static func describe(_ error: Error) -> String {
-        if let e = error as? FfiError {
-            switch e {
-            case .ReadOnly(let m), .NotFound(let m), .Malformed(let m), .Internal(let m): return m
-            }
-        }
-        return String(describing: error)
     }
 }

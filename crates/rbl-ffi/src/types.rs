@@ -35,7 +35,7 @@ pub struct LibrarySummary {
 }
 
 /// Where a view's tracks come from. The ids are the tree nodes' ids.
-#[derive(Debug, Clone, uniffi::Enum)]
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum TrackSource {
     Collection,
     Playlist { id: String },
@@ -43,24 +43,63 @@ pub enum TrackSource {
     History { id: String },
     /// Not supported by this bridge yet; opening it is an error.
     Folder { path: String },
-    /// Not supported by this bridge yet; opening it is an error.
     TagList,
 }
 
-#[derive(Debug, Clone, uniffi::Record)]
+/// The columns a view sorts by. `TrackNo` is the view's own order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Enum)]
+pub enum SortKey {
+    TrackNo,
+    Title,
+    Artist,
+    Album,
+    Genre,
+    Label,
+    Comment,
+    Key,
+    KeyCamelot,
+    Bpm,
+    Duration,
+    Rating,
+    PlayCount,
+    DateAdded,
+    ReleaseDate,
+    Size,
+    Year,
+    SampleRate,
+    Bitrate,
+    Color,
+    FileName,
+    Location,
+    Composer,
+    AlbumArtist,
+    Remixer,
+    OriginalArtist,
+    MixName,
+    DiscNo,
+    TrackNumber,
+    FileType,
+    BitDepth,
+    Lyricist,
+    DateCreated,
+    PublishTrackInfo,
+    Message,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct ViewSpec {
     pub source: TrackSource,
-    /// A wire sort name: `title`, `artist`, `bpm`, `dateAdded`, ... Unknown
-    /// names sort in track order.
-    pub sort: String,
+    pub sort: SortKey,
     pub descending: bool,
     pub query: String,
 }
 
-#[derive(Debug, Clone, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct ViewHandle {
     pub view_id: u32,
     pub len: u32,
+    /// The library generation the view was opened against.
+    pub generation: u32,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -94,4 +133,29 @@ pub struct Row {
     pub artwork_hue: u16,
     pub has_artwork: bool,
     pub file_name: String,
+}
+
+/// Why the library did not load.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum LibraryProblem {
+    /// No library here at all, and one could be made at `master_db`.
+    Missing { master_db: String },
+    /// There is a library, or something in its place, and it would not open.
+    Failed { message: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct EditHistory {
+    pub generation: u32,
+    pub can_undo: bool,
+    pub can_redo: bool,
+    pub undo_label: Option<String>,
+    pub redo_label: Option<String>,
+}
+
+/// How a load ended; the same news also arrives as an event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum LoadOutcome {
+    Ready,
+    Problem,
 }

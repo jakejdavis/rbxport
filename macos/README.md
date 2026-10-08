@@ -25,13 +25,39 @@ no-op when the Rust library has not changed.
 
 ## How the bridge works
 
-`crates/rbl-ffi` exposes `LibraryHandle` through UniFFI proc-macros (no UDL).
-`build-rust.sh` builds the static library, runs the `uniffi-bindgen` binary
-(`--features cli`) in library mode to write Swift bindings, and packages the
-library plus header and modulemap as `Generated/rbl_ffi.xcframework`. The
-bindings (`Generated/swift/rbl_ffi.swift`) compile into the app; `Generated/`,
-`build/` and `*.xcodeproj` are gitignored.
+`crates/rbl-ffi` is a thin UniFFI layer (proc-macros, no UDL) over `crates/rbl-app`,
+the Tauri-free app core. It holds an `Arc<AppState>`, calls `rbl_app::browse::*` and
+`startup::load_library`, and converts DTOs to UniFFI records/enums in `convert.rs`.
+It has no logic of its own; views live in rbl-app's registry.
 
-Calls are synchronous and blocking, so Swift runs them in `Task.detached`.
-The table (`NSTableView`) asks for cells, which loads pages of 128 rows via
-`fetch_rows`, cached by view id + page. Sorting and search re-open the view.
+- `Core.new(listener:cacheDir:)` opens the installed library; `Core.withFixture(listener:dir:)`
+  builds/opens a fixture (tests, previews, `RBXPORT_FIXTURE_DIR=<dir>` for the app).
+- `core.loadLibrary()` blocks (backup/journal recovery, snapshot cache, read-only open) and
+  also emits `LibraryReady` / `LibraryProblem` to the `EventListener` callback.
+- Typed API: `SortKey`, `NodeKind`, `TrackSource`, `ViewSpec`; errors are `FfiError`
+  (ReadOnly/NotFound/Malformed/Cancelled/Internal, with message and detail).
+
+`build-rust.sh` builds the static library, runs `uniffi-bindgen` to write Swift bindings, and
+packages `Generated/rbl_ffi.xcframework`. `Generated/`, `build/` and `*.xcodeproj` are gitignored.
+
+## Swift architecture
+
+- `BackendProtocol` (async API + `events: AsyncStream<LibraryEvent>`), implemented by
+  `actor Backend` (owns the UniFFI `Core`; `EventBridge` turns the callback into the stream)
+  and `actor MockBackend` (in-memory, for previews and tests).
+- `AppModel` (`@MainActor @Observable`) starts the event loop and the load, and reacts to
+  `LibraryReady` (load tree/summary), `LibraryProblem` (failed phase) and `LibraryChanged`
+  (reload tree and summary, keep the selected node, reopen the view).
+- `RowPager` pages rows lazily (128 per page), caches by view id + page with eviction;
+  `TrackTable` (`NSTableView`) renders from it.
+- The snapshot cache lives in `~/Library/Caches/com.rbxport.native`.
+
+## Tests
+
+```sh
+cargo test -p rbl-ffi -p rbl-app
+xcodebuild -scheme rbxport -configuration Debug -derivedDataPath build test
+```
+
+`macos/Tests`: model, pager and event-reload tests against `MockBackend`, plus an integration
+test of the real FFI over a temporary fixture library.

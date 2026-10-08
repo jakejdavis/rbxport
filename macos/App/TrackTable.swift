@@ -4,11 +4,11 @@ import SwiftUI
 /// An AppKit table over a view of the library. Rows load lazily, one page of
 /// 128 at a time, as `NSTableView` asks for the cells that are on screen.
 struct TrackTable: NSViewRepresentable {
-    let library: LibraryHandle
+    let backend: any BackendProtocol
     let opened: OpenedView
-    let onSort: (String, Bool) -> Void
+    let onSort: (SortKey, Bool) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeCoordinator() -> Coordinator { Coordinator(backend: backend) }
 
     func makeNSView(context: Context) -> NSScrollView {
         let table = NSTableView()
@@ -24,7 +24,7 @@ struct TrackTable: NSViewRepresentable {
             column.width = spec.width
             column.minWidth = 30
             column.resizingMask = .userResizingMask
-            if spec.sortable {
+            if spec.sort != nil {
                 column.sortDescriptorPrototype = NSSortDescriptor(key: spec.id, ascending: true)
             }
             if spec.rightAligned { column.headerCell.alignment = .right }
@@ -45,7 +45,6 @@ struct TrackTable: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         let coordinator = context.coordinator
         coordinator.onSort = onSort
-        coordinator.library = library
         if coordinator.opened != opened {
             coordinator.show(opened)
             if let first = scroll.documentView as? NSTableView, first.numberOfRows > 0 {
@@ -60,82 +59,46 @@ struct TrackTable: NSViewRepresentable {
             let id: String
             let title: String
             let width: CGFloat
-            var sortable = true
+            var sort: SortKey?
             var rightAligned = false
         }
 
-        // Column ids double as `sort_from_wire` names ("trackNo" falls back to track order).
         static let columns: [Spec] = [
-            Spec(id: "trackNo", title: "#", width: 50, rightAligned: true),
-            Spec(id: "title", title: "Title", width: 280),
-            Spec(id: "artist", title: "Artist", width: 180),
-            Spec(id: "album", title: "Album", width: 180),
-            Spec(id: "genre", title: "Genre", width: 110),
-            Spec(id: "bpm", title: "BPM", width: 64, rightAligned: true),
-            Spec(id: "key", title: "Key", width: 54),
-            Spec(id: "duration", title: "Time", width: 56, rightAligned: true),
-            Spec(id: "rating", title: "Rating", width: 70),
-            Spec(id: "dateAdded", title: "Date Added", width: 100),
+            Spec(id: "trackNo", title: "#", width: 50, sort: .trackNo, rightAligned: true),
+            Spec(id: "title", title: "Title", width: 280, sort: .title),
+            Spec(id: "artist", title: "Artist", width: 180, sort: .artist),
+            Spec(id: "album", title: "Album", width: 180, sort: .album),
+            Spec(id: "genre", title: "Genre", width: 110, sort: .genre),
+            Spec(id: "bpm", title: "BPM", width: 64, sort: .bpm, rightAligned: true),
+            Spec(id: "key", title: "Key", width: 54, sort: .key),
+            Spec(id: "duration", title: "Time", width: 56, sort: .duration, rightAligned: true),
+            Spec(id: "rating", title: "Rating", width: 70, sort: .rating),
+            Spec(id: "dateAdded", title: "Date Added", width: 100, sort: .dateAdded),
         ]
 
-        nonisolated static let pageSize = 128
-        /// Pages kept in memory; a view this size is far more than a screen needs.
-        static let maxPages = 256
-
         weak var table: NSTableView?
-        var library: LibraryHandle?
-        var onSort: (String, Bool) -> Void = { _, _ in }
-        private(set) var opened: OpenedView?
+        var onSort: (SortKey, Bool) -> Void = { _, _ in }
+        private let pager: RowPager
 
-        /// Cache keyed by view id + page.
-        private struct PageKey: Hashable { let viewID: UInt32; let page: Int }
-        private var pages: [PageKey: [Row]] = [:]
-        private var pageOrder: [PageKey] = []
-        private var inFlight: Set<PageKey> = []
-        private var applyingSortFromModel = false
+        var opened: OpenedView? { pager.opened }
+
+        init(backend: any BackendProtocol) {
+            pager = RowPager(backend: backend)
+            super.init()
+            pager.onPageLoaded = { [weak self] range in
+                guard let table = self?.table else { return }
+                table.reloadData(
+                    forRowIndexes: IndexSet(integersIn: range),
+                    columnIndexes: IndexSet(integersIn: 0..<table.numberOfColumns))
+            }
+        }
 
         func show(_ opened: OpenedView) {
-            self.opened = opened
-            pages.removeAll(keepingCapacity: true)
-            pageOrder.removeAll(keepingCapacity: true)
-            inFlight.removeAll()
+            pager.show(opened)
             table?.reloadData()
         }
 
-        func numberOfRows(in tableView: NSTableView) -> Int {
-            Int(opened?.handle.len ?? 0)
-        }
-
-        private func row(at index: Int) -> Row? {
-            guard let opened else { return nil }
-            let key = PageKey(viewID: opened.handle.viewId, page: index / Self.pageSize)
-            if let page = pages[key] { return page[safe: index % Self.pageSize] }
-            load(key)
-            return nil
-        }
-
-        private func load(_ key: PageKey) {
-            guard let library, !inFlight.contains(key) else { return }
-            inFlight.insert(key)
-            let offset = UInt32(key.page * Self.pageSize)
-            Task {
-                let rows = try? await Task.detached(priority: .userInitiated) {
-                    try library.fetchRows(viewId: key.viewID, offset: offset, len: UInt32(Self.pageSize))
-                }.value
-                inFlight.remove(key)
-                // Drop the page if the table has moved on to another view.
-                guard let rows, key.viewID == opened?.handle.viewId else { return }
-                pages[key] = rows
-                pageOrder.append(key)
-                if pageOrder.count > Self.maxPages {
-                    pages.removeValue(forKey: pageOrder.removeFirst())
-                }
-                let first = key.page * Self.pageSize
-                table?.reloadData(
-                    forRowIndexes: IndexSet(integersIn: first..<(first + rows.count)),
-                    columnIndexes: IndexSet(integersIn: 0..<(table?.numberOfColumns ?? 0)))
-            }
-        }
+        func numberOfRows(in tableView: NSTableView) -> Int { pager.rowCount }
 
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row index: Int) -> NSView? {
             guard let id = tableColumn?.identifier else { return nil }
@@ -159,7 +122,7 @@ struct TrackTable: NSViewRepresentable {
             }
             let spec = Self.columns.first { $0.id == id.rawValue }
             cell.textField?.alignment = spec?.rightAligned == true ? .right : .left
-            if let data = row(at: index) {
+            if let data = pager.row(at: index) {
                 cell.textField?.stringValue = Self.text(for: id.rawValue, in: data)
                 cell.textField?.textColor = .labelColor
             } else {
@@ -187,14 +150,10 @@ struct TrackTable: NSViewRepresentable {
         }
 
         func tableView(_ tableView: NSTableView, sortDescriptorsDidChange oldDescriptors: [NSSortDescriptor]) {
-            guard let descriptor = tableView.sortDescriptors.first, let key = descriptor.key else { return }
+            guard let descriptor = tableView.sortDescriptors.first, let id = descriptor.key,
+                let key = Self.columns.first(where: { $0.id == id })?.sort
+            else { return }
             onSort(key, !descriptor.ascending)
         }
-    }
-}
-
-extension Array {
-    fileprivate subscript(safe index: Int) -> Element? {
-        indices.contains(index) ? self[index] : nil
     }
 }
