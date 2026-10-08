@@ -31,6 +31,21 @@ pub struct AppError {
     pub detail: Option<String>,
 }
 
+static INTERNAL_ERROR_HOOK: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
+
+/// Registers what runs each time an [`AppError::internal`] is made (the shell
+/// reports it to crash telemetry). The first registration wins; until one is
+/// made the hook does nothing.
+pub fn set_internal_error_hook(hook: fn()) {
+    let _ = INTERNAL_ERROR_HOOK.set(hook);
+}
+
+fn report_internal_error() {
+    if let Some(hook) = INTERNAL_ERROR_HOOK.get() {
+        hook();
+    }
+}
+
 impl AppError {
     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
         Self { kind, message: message.into(), detail: None }
@@ -45,7 +60,7 @@ impl AppError {
     pub fn internal(detail: impl Into<String>) -> Self {
         let detail = detail.into();
         tracing::error!(error.detail = %detail, "internal error");
-        crate::sentry::capture_internal_error();
+        report_internal_error();
         Self::new(ErrorKind::Internal, "Something went wrong inside rbxport.").with_detail(detail)
     }
 }

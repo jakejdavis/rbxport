@@ -32,7 +32,8 @@ pub fn start(state: std::sync::Arc<AppState>) -> AppResult<()> {
         }
         *progress = BackupProgress { running: true, phase: "preparing".into(), ..Default::default() };
     }
-    tauri::async_runtime::spawn_blocking(move || {
+    // A plain thread: the job outlives the call and reports through `BackupProgress`.
+    std::thread::spawn(move || {
         let mut last_detail = std::time::Instant::now();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             create_with_progress(&state, &mut |phase, copied_bytes, total_bytes, item| {

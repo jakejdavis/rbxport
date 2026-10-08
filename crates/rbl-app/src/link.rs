@@ -200,10 +200,10 @@ impl Source for StateSource {
             };
         }
         let touched = match edit {
-            rbl_link::Edit::Tag { .. } | rbl_link::Edit::ClearTags => crate::commands::Touched::TagList,
-            rbl_link::Edit::Rating { track, .. } => crate::commands::Touched::Metadata(vec![track.to_string()]),
+            rbl_link::Edit::Tag { .. } | rbl_link::Edit::ClearTags => crate::edits::Touched::TagList,
+            rbl_link::Edit::Rating { track, .. } => crate::edits::Touched::Metadata(vec![track.to_string()]),
             rbl_link::Edit::GridOffset { .. } => unreachable!("handled above"),
-            rbl_link::Edit::HotCueBankCue { .. } => crate::commands::Touched::Metadata(Vec::new()),
+            rbl_link::Edit::HotCueBankCue { .. } => crate::edits::Touched::Metadata(Vec::new()),
             // The catalog keeps the link session's history and writes it
             // through the methods below.
             rbl_link::Edit::HistoryAdd { .. } | rbl_link::Edit::HistoryRemove { .. } | rbl_link::Edit::HistoryDelete { .. } => return false,
@@ -229,7 +229,7 @@ impl Source for StateSource {
             | rbl_link::Edit::HistoryAdd { .. }
             | rbl_link::Edit::HistoryRemove { .. }
             | rbl_link::Edit::HistoryDelete { .. } => unreachable!("handled above"),
-        }, |db, _| crate::commands::refresh_after_edit(&state, db, touched));
+        }, |db, _| crate::edits::refresh_after_edit(&state, db, touched));
         match result {
             Ok(generation) => { (self.1)(event, generation); true }
             Err(error) => { tracing::warn!(%error, ?edit, "player library edit or refresh failed"); false }
@@ -309,10 +309,10 @@ impl StateSource {
     /// again — with the play counts of `tracks` — and the window told.
     fn history_write<T>(&self, tracks: Vec<String>, edit: impl FnOnce(&mut rbl_db::write::Writer) -> Result<T, rbl_db::DbError>) -> Option<T> {
         let state = self.0.upgrade()?;
-        let touched = crate::commands::Touched::Histories(tracks);
+        let touched = crate::edits::Touched::Histories(tracks);
         let event = touched.event();
         let result = state.write_then(edit, |db, value| {
-            crate::commands::refresh_after_edit(&state, db, touched).map(|generation| (value, generation))
+            crate::edits::refresh_after_edit(&state, db, touched).map(|generation| (value, generation))
         });
         match result {
             Ok((value, generation)) => {

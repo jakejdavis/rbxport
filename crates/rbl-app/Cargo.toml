@@ -1,0 +1,41 @@
+[package]
+name = "rbl-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Tauri-free application core: state, errors, DTOs, backups, journals, startup and browse commands."
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+rbl-core = { path = "../rbl-core" }
+rbl-db = { path = "../rbl-db" }
+rbl-index = { path = "../rbl-index" }
+rbl-anlz = { path = "../rbl-anlz" }
+rbl-prolink = { path = "../rbl-prolink" }
+rbl-link = { path = "../rbl-link" }
+rbl-devices = { path = "../rbl-devices" }
+rbl-backup = { path = "../rbl-backup" }
+parking_lot = "0.12"
+uuid = { version = "1", features = ["v4"] }
+time = { version = "0.3", features = ["formatting"] }
+zip = { version = "4.6.1", default-features = false, features = ["deflate"] }
+tempfile = "3"
+
+[dev-dependencies]
+rbl-dbserver = { path = "../rbl-dbserver" }
+tracing-subscriber = "0.3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+midir = "0.11"
+
+[target.'cfg(windows)'.dependencies]
+midir = "0.11"
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }
