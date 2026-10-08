@@ -50,9 +50,9 @@ struct DetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if let library = model.library, let opened = model.opened {
+            if let opened = model.opened {
                 TrackTable(
-                    library: library,
+                    backend: model.backend,
                     opened: opened,
                     onSort: { key, descending in model.sort(by: key, descending: descending) }
                 )

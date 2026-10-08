@@ -4244,7 +4244,7 @@ dependencies = [
 name = "rbl-ffi"
 version = "1.2.0"
 dependencies = [
- "rbl-anlz",
+ "rbl-app",
  "rbl-db",
  "rbl-index",
  "tempfile",
