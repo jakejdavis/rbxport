@@ -21,11 +21,11 @@ use crate::error::{AppError, AppResult, ErrorKind};
 const MAX_VIEWS: usize = 16;
 
 pub struct AppState {
-    pub(crate) edit_gate: parking_lot::ReentrantMutex<()>,
-    pub(crate) edit_history: parking_lot::Mutex<EditHistory>,
-    pub(crate) analysis_write: parking_lot::Mutex<()>,
-    pub(crate) backup_progress: parking_lot::Mutex<crate::backups::BackupProgress>,
-    pub(crate) backup_sizes: parking_lot::Mutex<crate::backup_sizes::SizeCache>,
+    pub edit_gate: parking_lot::ReentrantMutex<()>,
+    pub edit_history: parking_lot::Mutex<EditHistory>,
+    pub analysis_write: parking_lot::Mutex<()>,
+    pub backup_progress: parking_lot::Mutex<crate::backups::BackupProgress>,
+    pub backup_sizes: parking_lot::Mutex<crate::backup_sizes::SizeCache>,
     inner: RwLock<Inner>,
     /// Stable local home for recovery journals and the destination setting.
     backup_dir: std::path::PathBuf,
@@ -41,7 +41,7 @@ pub struct AppState {
 /// One reversible library operation. Grid edits keep their own history because
 /// they also rewrite analysis files; text fields keep `WebKit`'s native history.
 #[derive(Clone)]
-pub(crate) enum LibraryEdit {
+pub enum LibraryEdit {
     DeletePlaylist(rbl_db::write::PlaylistDeletion),
     RenamePlaylist(rbl_db::write::PlaylistRename),
     MovePlaylist(rbl_db::write::PlaylistMove),
@@ -51,7 +51,7 @@ pub(crate) enum LibraryEdit {
 }
 
 impl LibraryEdit {
-    pub(crate) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         match self {
             Self::DeletePlaylist(edit) => edit.is_empty(),
             Self::RemovePlaylistTracks(edit) => edit.is_empty(),
@@ -63,24 +63,24 @@ impl LibraryEdit {
 }
 
 #[derive(Clone)]
-pub(crate) struct HistoryEntry {
-    pub(crate) edit: LibraryEdit,
-    pub(crate) label: &'static str,
+pub struct HistoryEntry {
+    pub edit: LibraryEdit,
+    pub label: &'static str,
 }
 
 /// Bounded session history for reversible library edits. The payloads retain
 /// exact database values or row ids, rather than reconstructing state from the
 /// interface when an action is undone.
 #[derive(Default)]
-pub(crate) struct EditHistory {
-    pub(crate) undo: Vec<HistoryEntry>,
-    pub(crate) redo: Vec<HistoryEntry>,
+pub struct EditHistory {
+    pub undo: Vec<HistoryEntry>,
+    pub redo: Vec<HistoryEntry>,
 }
 
 impl EditHistory {
     const LIMIT: usize = 50;
 
-    pub(crate) fn record(&mut self, edit: LibraryEdit, label: &'static str) {
+    pub fn record(&mut self, edit: LibraryEdit, label: &'static str) {
         self.undo.push(HistoryEntry { edit, label });
         if self.undo.len() > Self::LIMIT {
             self.undo.remove(0);
@@ -88,11 +88,11 @@ impl EditHistory {
         self.redo.clear();
     }
 
-    pub(crate) fn clear_redo(&mut self) {
+    pub fn clear_redo(&mut self) {
         self.redo.clear();
     }
 
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.undo.clear();
         self.redo.clear();
     }
@@ -349,7 +349,7 @@ impl AppState {
         self.inner.read().library_problem.clone()
     }
 
-    pub(crate) fn set_library_problem(&self, problem: Option<crate::dto::LibraryProblemDto>) {
+    pub fn set_library_problem(&self, problem: Option<crate::dto::LibraryProblemDto>) {
         self.inner.write().library_problem = problem;
     }
 
@@ -850,7 +850,7 @@ mod tests {
 mod edit_refresh_tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
-    use crate::commands::{refresh_after_edit, Touched};
+    use crate::edits::{refresh_after_edit, Touched};
 
     #[test]
     fn small_edits_refresh_and_persist() {

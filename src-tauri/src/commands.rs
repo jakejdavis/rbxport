@@ -22,11 +22,10 @@ use crate::dto::{
     XmlImportReportDto,
 };
 use crate::error::{AppError, AppResult, ErrorKind};
-use crate::state::{rows_to_dto, spec_from_wire, AppState, EditHistory, LibraryEdit};
+use crate::state::{spec_from_wire, AppState, LibraryEdit};
 
-/// Rows per request. The frontend asks a page at a time; this bound is what
-/// keeps a response inside the 64 KB cap.
-pub const MAX_ROWS: u32 = 128;
+pub use rbl_app::browse::MAX_ROWS;
+pub(crate) use rbl_app::edits::{apply_history, history_dto, refresh_after_edit, touched_by, write_error, Touched};
 
 /// Beats returned for one track. A four-minute track at 128 BPM has about 500
 /// and a three-hour mix around 23,000; this bounds the response without
@@ -61,26 +60,8 @@ where
 
 #[tauri::command]
 pub async fn library_summary(state: State<'_, Arc<AppState>>) -> AppResult<LibrarySummaryDto> {
-    let library = state.library()?;
-    let (read_only, db_version, load_ms, _generation) = state.summary();
-    let is_real_install = state.location()?.is_real_install;
-    blocking("library_summary", move || {
-        // The UI refreshes this while open; startup's process state is stale
-        // as soon as rekordbox launches or exits. Fixtures keep their own gate.
-        let read_only = if is_real_install {
-            rbl_db::is_rekordbox_running() && !rbl_db::unsafe_writes_enabled()
-        } else {
-            read_only
-        };
-        Ok(LibrarySummaryDto {
-            track_count: u32::try_from(library.len()).unwrap_or(u32::MAX),
-            playlist_count: u32::try_from(library.playlists().len()).unwrap_or(u32::MAX),
-            read_only,
-            db_version,
-            load_ms,
-        })
-    })
-    .await
+    let state = Arc::clone(&state);
+    blocking("library_summary", move || rbl_app::browse::library_summary(&state)).await
 }
 
 /// Removes the rekordbox-running write gate for this process. This deliberately
@@ -99,198 +80,22 @@ pub fn disable_read_only() -> AppResult<()> {
 
 #[tauri::command]
 pub async fn playlist_tree(state: State<'_, Arc<AppState>>) -> AppResult<Vec<TreeNodeDto>> {
-    let library = state.library()?;
-    blocking("playlist_tree", move || Ok(build_tree(&library))).await
-}
-
-fn build_tree(library: &Library) -> Vec<TreeNodeDto> {
-    let playlists = library.playlists();
-    let histories = library.histories();
-    let mut nodes = vec![
-        TreeNodeDto {
-            id: "all".into(),
-            name: "All Tracks".into(),
-            kind: "allTracks",
-            depth: 0,
-            expanded: None,
-            child_count: Some(u32::try_from(library.len()).unwrap_or(u32::MAX)),
-        },
-        TreeNodeDto {
-            id: "playlists".into(),
-            name: "Playlists".into(),
-            kind: "collection",
-            depth: 0,
-            expanded: Some(true),
-            child_count: Some(u32::try_from(playlists.len()).unwrap_or(u32::MAX)),
-        },
-    ];
-
-    push_lists(&mut nodes, &playlists, ListStyle::PLAYLISTS, 2);
-
-    // Histories only when there are some: an empty section is a heading that
-    // leads nowhere, and the rail already dims what has nothing in it.
-    if !histories.is_empty() {
-        nodes.push(TreeNodeDto {
-            id: "histories".into(),
-            name: "Histories".into(),
-            kind: "histories",
-            depth: 0,
-            // Open, with the years under it open and the months closed: the
-            // rail shows one section at a time, so the sessions — 187 of them
-            // in the reference library — open over nothing else.
-            expanded: Some(true),
-            child_count: Some(u32::try_from(histories.len()).unwrap_or(u32::MAX)),
-        });
-        // A year folder and a session are both "history": they are one
-        // section, and what tells them apart in the tree is whether anything
-        // sits under them.
-        push_lists(&mut nodes, &histories, ListStyle::HISTORIES, 2);
-    }
-    nodes
-}
-
-/// What to call a list with children, and one without, and how to order them.
-#[derive(Debug, Clone, Copy)]
-struct ListStyle {
-    folder: &'static str,
-    leaf: &'static str,
-    /// An intelligent playlist: a rule rather than a membership. Histories
-    /// have none, so theirs is the leaf.
-    smart: &'static str,
-    /// Filed by date rather than by hand: folders are a year and a month,
-    /// which rekordbox shows in calendar order under their month's name, not
-    /// in the order they were made. Sessions keep their `Seq`, which is the
-    /// order they were played in.
-    calendar: bool,
-}
-
-impl ListStyle {
-    const PLAYLISTS: Self =
-        Self { folder: "folder", leaf: "playlist", smart: "smartPlaylist", calendar: false };
-    const HISTORIES: Self =
-        Self { folder: "history", leaf: "history", smart: "history", calendar: true };
-}
-
-/// A month folder's name as rekordbox shows it: `djmdHistory` stores the
-/// month as its number.
-fn month_name(number: &str) -> Option<&'static str> {
-    const MONTHS: [&str; 12] = [
-        "January", "February", "March", "April", "May", "June",
-        "July", "August", "September", "October", "November", "December",
-    ];
-    let month = number.parse::<usize>().ok()?;
-    MONTHS.get(month.checked_sub(1)?).copied()
-}
-
-/// Flattens one list tree onto `nodes`, depth-first, in `Seq` order — or, for
-/// a calendar, with the year and month folders in date order.
-///
-/// `open_to` is the depth below which branches arrive expanded: the tree opens
-/// on the playlists and on the years, and closed on the months.
-fn push_lists(
-    nodes: &mut Vec<TreeNodeDto>,
-    lists: &rbl_index::Playlists,
-    style: ListStyle,
-    open_to: u32,
-) {
-    let mut children: Vec<Vec<usize>> = vec![Vec::new(); lists.len()];
-    let mut roots: Vec<usize> = Vec::new();
-    for index in 0..lists.len() {
-        match lists.parent.get(index).copied() {
-            Some(parent) if parent != rbl_index::NO_ID && (parent as usize) < lists.len() => {
-                if let Some(bucket) = children.get_mut(parent as usize) {
-                    bucket.push(index);
-                }
-            }
-            _ => roots.push(index),
-        }
-    }
-    if style.calendar {
-        // A year is "2026" and a month "9": the number is the date. A folder
-        // named anything else sorts after the dated ones, in `Seq` order.
-        let by_date = |index: &usize| -> (u64, u32) {
-            if lists.is_folder(*index) {
-                (lists.name(*index).parse::<u64>().unwrap_or(u64::MAX), 0)
-            } else {
-                (u64::MAX, lists.seq.get(*index).copied().unwrap_or(u32::MAX))
-            }
-        };
-        roots.sort_by_key(by_date);
-        for bucket in &mut children {
-            bucket.sort_by_key(by_date);
-        }
-    }
-
-    // Iterative, with a visited set: a corrupt parent cycle must not recurse
-    // forever or blow the stack.
-    let mut stack: Vec<(usize, u32)> = roots.iter().rev().map(|&i| (i, 1_u32)).collect();
-    let mut visited = vec![false; lists.len()];
-    while let Some((index, depth)) = stack.pop() {
-        if visited.get(index).copied().unwrap_or(true) {
-            continue;
-        }
-        if let Some(slot) = visited.get_mut(index) {
-            *slot = true;
-        }
-        let under = children.get(index).map_or(0, Vec::len);
-        let members = lists.members.get(index).map_or(0, Vec::len);
-        // A folder by its attribute, or by what is under it: a history year
-        // is a folder only in the second sense, an empty playlist folder only
-        // in the first.
-        let folder = lists.is_folder(index) || under > 0;
-        let name = lists.name(index);
-        // Depth 2 under the section's heading is the month, filed in a year.
-        let name = match (style.calendar && folder && depth == 2, month_name(name)) {
-            (true, Some(month)) => month.to_owned(),
-            _ => name.to_owned(),
-        };
-        let smart = !folder && lists.is_smart(index);
-        nodes.push(TreeNodeDto {
-            id: lists.ids.get(index).copied().unwrap_or(0).to_string(),
-            name,
-            kind: if folder {
-                style.folder
-            } else if smart {
-                style.smart
-            } else {
-                style.leaf
-            },
-            depth,
-            expanded: if folder { Some(depth < open_to) } else { None },
-            // An intelligent playlist's count is whatever its rule admits
-            // today, which is not known until it is opened; the tree shows
-            // none rather than evaluating every rule to draw itself.
-            child_count: if smart {
-                None
-            } else {
-                Some(u32::try_from(if folder { under } else { members }).unwrap_or(u32::MAX))
-            },
-        });
-        if let Some(below) = children.get(index) {
-            for &child in below.iter().rev() {
-                stack.push((child, depth + 1));
-            }
-        }
-    }
+    let state = Arc::clone(&state);
+    blocking("playlist_tree", move || rbl_app::browse::playlist_tree(&state)).await
 }
 
 #[tauri::command]
 pub async fn open_view(state: State<'_, Arc<AppState>>, spec: ViewSpecDto) -> AppResult<ViewHandleDto> {
-    let library = state.library()?;
     // A folder is read from disk, not from the index, so it takes its own
     // path before the source is translated.
     if let crate::dto::TrackSourceDto::Folder { path } = &spec.source {
+        state.library()?;
         return crate::explorer::open_folder(&state, path.clone(), &spec).await;
     }
-    let parsed = spec_from_wire(&library, &spec);
     // Sorting and filtering happen here, so this is the one that must not run
     // on the async thread.
-    let handle = Arc::clone(&state);
-    blocking("open_view", move || {
-        let (view_id, len, generation) = handle.open_view_scoped(&parsed, spec.search_field)?;
-        Ok(ViewHandleDto { view_id, len, gen: generation })
-    })
-    .await
+    let state = Arc::clone(&state);
+    blocking("open_view", move || rbl_app::browse::open_view(&state, &spec)).await
 }
 
 #[tauri::command]
@@ -301,89 +106,23 @@ pub async fn fetch_rows(
     len: u32,
     extra_columns: Option<Vec<String>>,
 ) -> AppResult<Vec<RowDto>> {
-    if len > MAX_ROWS {
-        return Err(
-            AppError::new(ErrorKind::Malformed, "Too many rows requested at once.")
-                .with_detail(format!("len {len} exceeds the {MAX_ROWS}-row cap")),
-        );
-    }
-    let library = state.library()?;
     let extra_columns = extra_columns.unwrap_or_default();
     let handle = Arc::clone(&state);
     if let Some(folder) = state.folder_view(view_id) {
+        rbl_app::browse::check_page(len)?;
+        let library = state.library()?;
         let mut rows = crate::explorer::fetch_rows(library, folder, offset, len).await?;
         if extra_columns.is_empty() {
             Ok(rows)
         } else {
             blocking("fetch_row_details", move || {
-                enrich_rows(&handle, &mut rows, &extra_columns)?;
+                rbl_app::browse::enrich_rows(&handle, &mut rows, &extra_columns)?;
                 Ok(rows)
             }).await
         }
     } else {
-        let view = state.view(view_id)?;
-        blocking("fetch_rows", move || {
-            let offset = offset as usize;
-            let window = view.window(offset, len as usize);
-            let mut rows = rows_to_dto(&library, window, offset);
-            for (position, row) in rows.iter_mut().enumerate() {
-                row.track_no = view.track_no_at(offset.saturating_add(position));
-            }
-            if !extra_columns.is_empty() { enrich_rows(&handle, &mut rows, &extra_columns)?; }
-            Ok(rows)
-        })
-        .await
+        blocking("fetch_rows", move || rbl_app::browse::fetch_rows(&handle, view_id, offset, len, &extra_columns)).await
     }
-}
-
-/// Adds only requested browser fields, keeping ordinary row pages small.
-fn enrich_rows(state: &AppState, rows: &mut [RowDto], columns: &[String]) -> AppResult<()> {
-    use serde_json::{json, Value};
-    const FIELDS: &[&str] = &[
-        "size", "discNo", "albumArtist", "composer", "lyricist", "fileType", "year",
-        "mixName", "remixer", "originalArtist", "sampleRate", "bitrate", "bitDepth",
-        "location", "dateCreated", "publishTrackInfo", "message", "color",
-        "djPlayCount", "myTag", "trackNumber", "cloud",
-    ];
-    let wanted: Vec<&str> = columns.iter().map(String::as_str).filter(|column| FIELDS.contains(column)).collect();
-    if wanted.is_empty() { return Ok(()); }
-    state.read_db(|db| {
-        for row in rows {
-            if row.id.starts_with("file:") { continue; }
-            let Some(details) = rbl_db::details::browser_details(db.connection(), &row.id)? else { continue };
-            let mut values = serde_json::Map::new();
-            for &column in &wanted {
-                let value: Value = match column {
-                    "size" => json!(details.file_size),
-                    "discNo" => json!(details.disc_number),
-                    "albumArtist" => json!(details.album_artist),
-                    "composer" => json!(details.composer),
-                    "lyricist" => json!(details.lyricist),
-                    "fileType" => json!(details.file_type),
-                    "year" => json!(details.year),
-                    "mixName" => json!(details.mix_name),
-                    "remixer" => json!(details.remixer),
-                    "originalArtist" => json!(details.original_artist),
-                    "sampleRate" => json!(details.sample_rate),
-                    "bitrate" => json!(details.bitrate),
-                    "bitDepth" => json!(details.bit_depth),
-                    "location" => json!(details.path),
-                    "dateCreated" => json!(details.date_created),
-                    "publishTrackInfo" => json!(details.publish),
-                    "message" => json!(details.message),
-                    "color" => json!(details.color.parse::<u8>().unwrap_or(0)),
-                    "djPlayCount" => json!(details.play_count),
-                    "myTag" => json!(rbl_db::details::my_tag_names(db.connection(), &row.id).join(", ")),
-                    "trackNumber" => json!(details.track_number),
-                    "cloud" => json!(details.path.starts_with("/contents_")),
-                    _ => continue,
-                };
-                values.insert(column.to_owned(), value);
-            }
-            row.extra = Some(values);
-        }
-        Ok(())
-    }).map_err(write_error)
 }
 
 #[tauri::command]
@@ -393,19 +132,11 @@ pub async fn view_ids_in_range(
     from: u32,
     to: u32,
 ) -> AppResult<Vec<String>> {
-    let library = state.library()?;
     if let Some(folder) = state.folder_view(view_id) {
-        return crate::explorer::ids_in_range(library, folder, from, to).await;
+        return crate::explorer::ids_in_range(state.library()?, folder, from, to).await;
     }
-    let view = state.view(view_id)?;
-    blocking("view_ids_in_range", move || {
-        Ok(library
-            .ids_in_range(&view, from as usize, to as usize)
-            .into_iter()
-            .map(|id| id.to_string())
-            .collect())
-    })
-    .await
+    let state = Arc::clone(&state);
+    blocking("view_ids_in_range", move || rbl_app::browse::view_ids_in_range(&state, view_id, from, to)).await
 }
 
 /// Waveform bytes for a track, as raw bytes rather than JSON.
@@ -569,31 +300,6 @@ fn window_of(data: &[u8], stride: usize, from: Option<u32>, len: Option<u32>) ->
 
 // ---------------------------------------------------------------- editing
 
-/// What an edit changed, and therefore how much has to be re-read.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Touched {
-    /// Only the playlist tree. Re-reading it costs 24 ms against 233 ms for
-    /// the whole library, and it is by far the most common kind of edit.
-    Playlists,
-    /// A track column changed, so the ranks and the search arena are stale.
-    Tracks,
-    /// Only the Tag List.
-    TagList,
-    /// Existing tracks: rating, colour, comment, or play count.
-    Metadata(Vec<String>),
-    /// History membership, optionally with play counts to refresh.
-    Histories(Vec<String>),
-}
-
-impl Touched {
-    /// The event that tells the window. A Tag List edit leaves every other
-    /// view as it was, so it has its own rather than `library:changed`,
-    /// which makes every open list fetch its rows again.
-    pub(crate) fn event(&self) -> &'static str {
-        if matches!(self, Self::TagList) { "tag-list:changed" } else { "library:changed" }
-    }
-}
-
 /// Commits an edit and refreshes the affected index on the same connection.
 pub(crate) async fn edit<R: tauri::Runtime, F>(
     app: tauri::AppHandle<R>,
@@ -647,16 +353,6 @@ where
     Ok(generation)
 }
 
-fn history_dto(generation: u32, history: &EditHistory) -> EditHistoryDto {
-    EditHistoryDto {
-        generation,
-        can_undo: !history.undo.is_empty(),
-        can_redo: !history.redo.is_empty(),
-        undo_label: history.undo.last().map(|entry| entry.label.to_owned()),
-        redo_label: history.redo.last().map(|entry| entry.label.to_owned()),
-    }
-}
-
 pub(crate) async fn recorded_edit<R: tauri::Runtime, F>(
     app: tauri::AppHandle<R>,
     state: State<'_, Arc<AppState>>,
@@ -684,78 +380,6 @@ where
     let _ = tauri::Emitter::emit(&app, "library:changed", dto.generation);
     let _ = tauri::Emitter::emit(&app, "edit-history:changed", dto.clone());
     Ok(dto)
-}
-
-fn touched_by(edit: &LibraryEdit) -> Touched {
-    match edit {
-        LibraryEdit::DeletePlaylist(_) | LibraryEdit::RenamePlaylist(_) |
-        LibraryEdit::MovePlaylist(_) | LibraryEdit::RemovePlaylistTracks(_) => Touched::Playlists,
-        // Tokens keep their database row ids private; a full reload after an
-        // undo is uncommon and guarantees every view and sort follows it.
-        LibraryEdit::Track(_) | LibraryEdit::TrackTags(_) => Touched::Tracks,
-    }
-}
-
-fn apply_history(writer: &mut rbl_db::write::Writer, edit: &LibraryEdit, undo: bool) -> Result<(), rbl_db::DbError> {
-    match edit {
-        LibraryEdit::DeletePlaylist(value) => if undo { writer.restore_playlist(value) } else { writer.redo_playlist_deletion(value) }.map(|_| ()),
-        LibraryEdit::RenamePlaylist(value) => if undo { writer.undo_rename(value) } else { writer.redo_rename(value) }.map(|_| ()),
-        LibraryEdit::MovePlaylist(value) => if undo { writer.undo_move(value) } else { writer.redo_move(value) }.map(|_| ()),
-        LibraryEdit::RemovePlaylistTracks(value) => if undo { writer.undo_track_removal(value) } else { writer.redo_track_removal(value) }.map(|_| ()),
-        LibraryEdit::Track(values) => {
-            let ordered: Box<dyn Iterator<Item = _>> = if undo {
-                Box::new(values.iter().rev())
-            } else {
-                Box::new(values.iter())
-            };
-            for value in ordered {
-                if undo { writer.undo_track_edit(value)?; } else { writer.redo_track_edit(value)?; }
-            }
-            Ok(())
-        }
-        LibraryEdit::TrackTags(value) => if undo {
-            writer.undo_tag_edit(value)
-        } else {
-            writer.redo_tag_edit(value)
-        }.map(|_| ()),
-    }
-}
-
-/// Shared by desktop and CDJ edits; the writer holds the edit gate until
-/// both persistence and the new index are visible.
-pub(crate) fn refresh_after_edit(state: &AppState, db: &rbl_db::Library, touched: Touched) -> Result<u32, rbl_db::DbError> {
-    match touched {
-        Touched::Metadata(ids) => state.refresh_metadata(db, &ids, false),
-        Touched::Histories(ids) if !ids.is_empty() => state.refresh_metadata(db, &ids, true),
-        Touched::Tracks => {
-            let started = std::time::Instant::now();
-            let (library, _) = rbl_index::load(db)?;
-            let load_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-            state.set_library(library, rbl_db::is_rekordbox_running(), db.schema().db_version, load_ms, db.location().clone());
-            Ok(state.summary().3)
-        }
-        touched => {
-            let library = state.library().map_err(|e| rbl_db::DbError::Open(e.to_string()))?;
-            match touched {
-                Touched::TagList => {
-                    library.set_tag_list(rbl_index::reload_tag_list(db, &library)?);
-                    return Ok(state.invalidate_tag_list_views());
-                }
-                Touched::Playlists => library.set_playlists(rbl_index::reload_playlists(db, &library)?),
-                Touched::Histories(_) => library.set_histories(rbl_index::reload_histories(db, &library)?),
-                _ => unreachable!("track changes handled above"),
-            }
-            Ok(state.invalidate_views())
-        }
-    }
-}
-
-/// Maps a database refusal onto the error kind the frontend distinguishes.
-pub(crate) fn write_error(error: rbl_db::DbError) -> AppError {
-    match error {
-        rbl_db::DbError::WriteRefused(reason) => AppError::new(ErrorKind::ReadOnly, reason),
-        other => AppError::new(ErrorKind::Internal, other.to_string()),
-    }
 }
 
 /// Re-reads the library on request: what the analysis queue asks for once

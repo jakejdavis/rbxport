@@ -4055,6 +4055,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "rbl-app"
+version = "1.2.0"
+dependencies = [
+ "libc",
+ "midir",
+ "parking_lot",
+ "rbl-anlz",
+ "rbl-backup",
+ "rbl-core",
+ "rbl-db",
+ "rbl-dbserver",
+ "rbl-devices",
+ "rbl-index",
+ "rbl-link",
+ "rbl-prolink",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "time",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "windows-sys 0.61.2",
+ "zip",
+]
+
+[[package]]
 name = "rbl-audio"
 version = "1.2.0"
 dependencies = [
@@ -4317,8 +4345,6 @@ dependencies = [
  "base64 0.22.1",
  "dirs 5.0.1",
  "drag",
- "libc",
- "midir",
  "minisign-verify",
  "objc2",
  "objc2-app-kit",
@@ -4326,11 +4352,10 @@ dependencies = [
  "parking_lot",
  "rbl-analysis",
  "rbl-anlz",
+ "rbl-app",
  "rbl-audio",
- "rbl-backup",
  "rbl-core",
  "rbl-db",
- "rbl-dbserver",
  "rbl-deck",
  "rbl-devices",
  "rbl-export",
@@ -4338,7 +4363,6 @@ dependencies = [
  "rbl-link",
  "rbl-onelibrary",
  "rbl-pdb",
- "rbl-prolink",
  "semver",
  "sentry",
  "serde",
@@ -4351,14 +4375,11 @@ dependencies = [
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
  "tempfile",
- "thiserror 2.0.20",
  "time",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
  "uuid",
- "windows-sys 0.61.2",
- "zip",
 ]
 
 [[package]]

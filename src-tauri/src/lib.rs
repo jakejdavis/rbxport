@@ -17,19 +17,9 @@ mod usb_import;
 pub mod cues;
 pub mod details;
 pub mod grid;
-mod durable;
-mod backups;
-mod backup_copy;
-mod backup_zip;
-mod backup_sizes;
-mod backup_restore_scripts;
-mod file_journal;
 mod new_library;
 mod diagnostics;
 mod explorer;
-mod link;
-mod rx3_link;
-mod network_labels;
 pub mod logging;
 pub mod menu;
 pub mod player;
@@ -42,14 +32,17 @@ mod sync_window;
 mod report;
 mod scripting;
 mod device_settings;
-pub mod dto;
-mod error;
-pub mod state;
 mod test_port;
 mod elevated_update;
 mod update;
 
-pub use error::{AppError, AppResult, ErrorKind};
+// The app core lives in `rbl-app`; these keep the `crate::state`-style paths
+// the commands and scripting code have always used.
+pub use rbl_app::{
+    backup_copy, backup_restore_scripts, backup_sizes, backup_zip, backups, dto, durable, error, file_journal, link,
+    network_labels, rx3_link, state,
+};
+pub use rbl_app::{AppError, AppResult, ErrorKind};
 
 /// Runs the protected Windows update entry point before Tauri starts.
 pub fn run_elevated_update_helper_if_requested() -> Option<i32> {
@@ -60,149 +53,32 @@ use state::AppState;
 use std::sync::Arc;
 use tauri::Manager;
 
-/// Loads the library off the UI thread and hands it to the state.
-///
-/// Read-only always: this application never opens the user's library for
-/// writing during startup, and `rbl-db` refuses it while rekordbox runs.
 /// Where the library snapshot lives.
 ///
 /// Under the app's own data directory, not the library's: it is derived, it is
 /// ours, and nothing outside this app should ever find it next to rekordbox's
 /// files.
-fn cache_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    use tauri::Manager as _;
-    Some(app.path().app_cache_dir().ok()?.join("library.snapshot"))
+fn cache_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_cache_dir().ok()
 }
 
-/// The schema version as a plain number, so a library whose schema changed
-/// never reads a snapshot built against the old one.
-fn schema_key(db_version: Option<i64>) -> u32 {
-    db_version.and_then(|v| u32::try_from(v).ok()).unwrap_or(0)
+/// Forwards the core's events to the webview under their historical names.
+#[derive(Clone)]
+pub(crate) struct TauriSink(pub tauri::AppHandle);
+
+impl rbl_app::EventSink for TauriSink {
+    fn emit(&self, event: rbl_app::AppEvent) {
+        let _ = tauri::Emitter::emit(&self.0, event.name(), &event);
+    }
 }
 
+/// Loads the library off the UI thread and hands it to the state.
 pub(crate) fn spawn_library_load(app: tauri::AppHandle) {
     tauri::async_runtime::spawn_blocking(move || {
-        let started = std::time::Instant::now();
-        if let Ok(location) = rbl_db::detect() {
-            if let Err(e) = backups::recover(app.state::<Arc<state::AppState>>().backup_dir(), &location) {
-                report_problem(&app, dto::LibraryProblemDto::Failed { message: e.to_string() });
-                return;
-            }
-        }
-        let cache_path = cache_path(&app);
-        let snapshot = cache_path.clone().and_then(|path| {
-            std::thread::Builder::new().name("startup-snapshot".into())
-                .spawn(move || rbl_index::cache::prepare(&path)).ok()
-        });
-        match rbl_db::Library::open_installed_read_only() {
-            Ok(db) => {
-                if let Err(e) = file_journal::recover(app.state::<Arc<state::AppState>>().backup_dir(), db.location()) {
-                    tracing::error!(error = %e, "analysis recovery failed");
-                    report_problem(&app, dto::LibraryProblemDto::Failed { message: e.to_string() });
-                    return;
-                }
-                let db_version = db.schema().db_version;
-                let location = db.location().clone();
-                let master_db = db.location().master_db.clone();
-                // Reading 38,681 rows out of SQLCipher is 543 ms of the 680 ms
-                // a start costs, and none of it gets faster — the work is the
-                // decryption. A snapshot of the built columns turns the same
-                // start into a sequential read.
-                // Content rather than file times: rekordbox rewrites the WAL
-                // without changing a row, and keying on that refused the
-                // snapshot on every start it was running for.
-                let content = rbl_index::content_version(&db).ok();
-                let fingerprint = cache_path.as_ref().and_then(|_| {
-                    rbl_index::cache::Fingerprint::of(&master_db, schema_key(db_version), content?)
-                });
-                let prepared = snapshot.and_then(|job| job.join().ok()).flatten();
-                if let Some(fp) = fingerprint {
-                    if let Some(library) = prepared.and_then(|snapshot| snapshot.validated(fp)) {
-                        let load_ms =
-                            u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-                        tracing::debug!(tracks = library.len(), load_ms, "library from cache");
-                        let read_only = rbl_db::is_rekordbox_running();
-                        app.state::<Arc<AppState>>().set_library(
-                            library, read_only, db_version, load_ms, location,
-                        );
-                        let _ = tauri::Emitter::emit(&app, "library:ready", ());
-                        return;
-                    }
-                }
-                // A second read-only handle allows cues to overlap metadata.
-                // Failure falls back to the single-connection loader.
-                let cue_reader = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).ok();
-                match rbl_index::load_with_cue_reader(&db, cue_reader) {
-                    Ok((library, stats)) => {
-                        let load_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-                        tracing::debug!(
-                            tracks = stats.tracks,
-                            playlists = stats.playlists,
-                            heap_mb = stats.heap_bytes / 1_048_576,
-                            load_ms,
-                            "library loaded"
-                        );
-                        // Writes are gated on rekordbox not running, which we
-                        // re-check per transaction; the banner reflects it now.
-                        let read_only = rbl_db::is_rekordbox_running();
-                        app.state::<Arc<AppState>>()
-                            .set_library(library, read_only, db_version, load_ms, location);
-                        let _ = tauri::Emitter::emit(&app, "library:ready", ());
-
-                        // Written after the interface is live, and only if the
-                        // database has not moved since the fingerprint was
-                        // taken — rekordbox may have written while we read,
-                        // and a snapshot of a half-read library keyed to bytes
-                        // that no longer exist would be served on a later
-                        // start as though it were current.
-                        if let (Some(path), Some(before)) = (cache_path.as_ref(), fingerprint) {
-                            let after = rbl_index::content_version(&db).ok().and_then(|now| {
-                                rbl_index::cache::Fingerprint::of(
-                                    &master_db,
-                                    schema_key(db_version),
-                                    now,
-                                )
-                            });
-                            if after == Some(before) {
-                                let held = app.state::<Arc<AppState>>();
-                                if let Ok(library) = held.library() {
-                                    if let Err(e) =
-                                        rbl_index::cache::save(path, &library, before)
-                                    {
-                                        tracing::warn!(error = %e, "could not write the library cache");
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "could not index the library");
-                        report_problem(&app, dto::LibraryProblemDto::Failed { message: e.to_string() });
-                    }
-                }
-            }
-            Err(e) => {
-                // Nothing to open, as against something that would not open:
-                // offered as a new library rather than reported as a failure.
-                if let Ok(Some(plan)) = rbl_db::new_library::plan() {
-                    tracing::info!(path = %plan.master_db.display(), error = %e, "no library here; offering to make one");
-                    report_problem(&app, dto::LibraryProblemDto::Missing {
-                        master_db: plan.master_db.display().to_string(),
-                    });
-                    return;
-                }
-                tracing::error!(error = %e, "could not open the library");
-                report_problem(&app, dto::LibraryProblemDto::Failed { message: e.to_string() });
-            }
-        }
+        let state = app.state::<Arc<AppState>>();
+        let cache = cache_dir(&app);
+        rbl_app::startup::load_library(&state, cache.as_deref(), &TauriSink(app.clone()));
     });
-}
-
-/// Keeps why the library did not load, for a window that asks later, and
-/// tells a window already listening.
-fn report_problem(app: &tauri::AppHandle, problem: dto::LibraryProblemDto) {
-    app.state::<Arc<AppState>>().set_library_problem(Some(problem.clone()));
-    let _ = tauri::Emitter::emit(app, "library:problem", problem);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -372,6 +248,7 @@ pub fn run() {
     // chance to be delivered during shutdown.  The build injects the DSN;
     // without one this intentionally becomes a no-op client.
     let _sentry = sentry::install();
+    rbl_app::set_internal_error_hook(sentry::capture_internal_error);
 
     let mut context = tauri::generate_context!();
     if let Some(args) = browser_args() {
