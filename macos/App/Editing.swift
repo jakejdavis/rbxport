@@ -6,8 +6,18 @@ import Foundation
 extension NSPasteboard.PasteboardType {
     /// Track ids dragged out of the table, one pasteboard item per row.
     static let rbxportTracks = NSPasteboard.PasteboardType("com.rbxport.track-ids")
+    /// Track ids offered for export to a device. Unlike `rbxportTracks` this is present whether or not
+    /// the library may be edited: exporting writes the stick, not the library.
+    static let rbxportExportTracks = NSPasteboard.PasteboardType("com.rbxport.export-track-ids")
+    /// A playlist's core id, dragged out of the source list to a device.
+    static let rbxportExportPlaylist = NSPasteboard.PasteboardType("com.rbxport.export-playlist")
     /// A source-list node (playlist or folder) dragged inside the outline.
     static let rbxportSidebarNode = NSPasteboard.PasteboardType("com.rbxport.sidebar-node")
+
+    /// The track ids a drag offers a device, in row order.
+    @MainActor static func exportTrackIDs(from pasteboard: NSPasteboard) -> [String] {
+        (pasteboard.pasteboardItems ?? []).compactMap { $0.string(forType: .rbxportExportTracks) }.filter { !$0.isEmpty }
+    }
 
     /// The track ids a drag carries, in row order. Empty placeholders (rows that were not loaded) are dropped.
     @MainActor static func trackIDs(from pasteboard: NSPasteboard) -> [String] {

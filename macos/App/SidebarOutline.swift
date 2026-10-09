@@ -29,7 +29,7 @@ struct SidebarOutline: NSViewRepresentable {
         outline.delegate = context.coordinator
         outline.menuProvider = { [weak coordinator = context.coordinator] node in coordinator?.menu(for: node) }
         outline.onRename = { [weak coordinator = context.coordinator] in coordinator?.renameSelected() }
-        outline.registerForDraggedTypes([.rbxportSidebarNode, .rbxportTracks, .fileURL])
+        outline.registerForDraggedTypes([.rbxportSidebarNode, .rbxportTracks, .rbxportExportTracks, .rbxportExportPlaylist, .fileURL])
         outline.setDraggingSourceOperationMask(.move, forLocal: true)
         context.coordinator.outline = outline
         model.sidebar.onNodeReloaded = { [weak coordinator = context.coordinator] node in
@@ -199,6 +199,13 @@ struct SidebarOutline: NSViewRepresentable {
                 outlineView.makeView(withIdentifier: identifier, owner: nil) as? SidebarCellView
                 ?? SidebarCellView(identifier: identifier, isSection: node.isSection)
             cell.show(node, count: sidebar.showChildCounts && node.showsCount ? node.childCount : nil)
+            if node.kind == .device {
+                let model = model
+                let path = node.path
+                cell.configureEject(enabled: path.flatMap { model.devices.device(path: $0) }.map { model.devices.canEject($0) } ?? false) {
+                    if let path { Task { await model.eject(path: path) } }
+                }
+            }
             return cell
         }
 
@@ -234,18 +241,27 @@ struct SidebarOutline: NSViewRepresentable {
         // MARK: Drag and drop
 
         func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any) -> NSPasteboardWriting? {
-            guard model.canEdit, let node = item as? SidebarNode, node.isEditableItem else { return nil }
+            guard let node = item as? SidebarNode, node.isEditableItem else { return nil }
             let pasteboardItem = NSPasteboardItem()
-            pasteboardItem.setString(node.id, forType: .rbxportSidebarNode)
-            return pasteboardItem
+            // Moving a playlist inside the tree is an edit; dragging one to a device is not.
+            if model.canEdit { pasteboardItem.setString(node.id, forType: .rbxportSidebarNode) }
+            if node.kind == .playlist || node.kind == .smartPlaylist, let id = node.libraryID {
+                pasteboardItem.setString(id, forType: .rbxportExportPlaylist)
+            }
+            return pasteboardItem.types.isEmpty ? nil : pasteboardItem
         }
 
         func outlineView(
             _ outlineView: NSOutlineView, validateDrop info: NSDraggingInfo, proposedItem item: Any?,
             proposedChildIndex index: Int
         ) -> NSDragOperation {
-            guard model.canEdit else { return [] }
             let pasteboard = info.draggingPasteboard
+            // A device takes playlists and tracks to export; nothing else is dropped on it.
+            if let node = item as? SidebarNode, node.kind == .device {
+                guard index == NSOutlineViewDropOnItemIndex, deviceDropAccepts(pasteboard, node) else { return [] }
+                return .copy
+            }
+            guard model.canEdit else { return [] }
             if let id = pasteboard.string(forType: .rbxportSidebarNode), let dragged = sidebar.node(withID: id) {
                 guard let plan = sidebar.movePlan(dragging: dragged, onto: item as? SidebarNode, childIndex: index) else {
                     return []
@@ -276,6 +292,18 @@ struct SidebarOutline: NSViewRepresentable {
         ) -> Bool {
             let pasteboard = info.draggingPasteboard
             let model = model
+            if let node = item as? SidebarNode, node.kind == .device, let path = node.path {
+                if let playlist = pasteboard.string(forType: .rbxportExportPlaylist), !playlist.isEmpty {
+                    Task { await model.exportPlaylist(id: playlist, to: path) }
+                    return true
+                }
+                let tracks = NSPasteboard.PasteboardType.exportTrackIDs(from: pasteboard)
+                if !tracks.isEmpty {
+                    Task { await model.exportTracks(tracks, to: path) }
+                    return true
+                }
+                return false
+            }
             if let id = pasteboard.string(forType: .rbxportSidebarNode), let dragged = sidebar.node(withID: id),
                 let plan = sidebar.movePlan(dragging: dragged, onto: item as? SidebarNode, childIndex: index)
             {
@@ -297,18 +325,36 @@ struct SidebarOutline: NSViewRepresentable {
             return false
         }
 
+        /// Whether a drag carries something a device can be given, and the device is free.
+        private func deviceDropAccepts(_ pasteboard: NSPasteboard, _ node: SidebarNode) -> Bool {
+            guard let path = node.path, !model.exportJobs.isActive(path: path) else { return false }
+            if let playlist = pasteboard.string(forType: .rbxportExportPlaylist), !playlist.isEmpty { return true }
+            return !NSPasteboard.PasteboardType.exportTrackIDs(from: pasteboard).isEmpty
+        }
+
         // MARK: Context menu
 
         func menu(for node: SidebarNode) -> NSMenu? {
-            guard let rows = ContextMenus.treeMenu(for: node.kind, editable: model.canEdit) else { return nil }
+            let device = node.path.flatMap { model.devices.device(path: $0) }
+            let rows = ContextMenus.treeMenu(
+                for: node.kind, editable: model.canEdit, devices: model.deviceTargets,
+                deviceBusy: device.map { !model.devices.canEject($0) } ?? false)
+            guard let rows else { return nil }
             return MenuBuilder.menu(rows) { [weak self] command in self?.run(command, on: node) }
         }
 
         private func run(_ command: MenuCommand, on node: SidebarNode) {
-            guard case .exportPlaylist(let format) = command else {
+            switch command {
+            case .exportToDevice, .ejectDevice, .openSyncManager:
+                model.runDeviceMenu(command, on: node)
+                return
+            case .exportPlaylist:
+                break
+            default:
                 model.runTreeMenu(command, on: node)
                 return
             }
+            guard case .exportPlaylist(let format) = command else { return }
             let panel = NSSavePanel()
             let ext = format == .txt ? "txt" : "m3u8"
             panel.nameFieldStringValue = "\(node.name).\(ext)"
@@ -392,6 +438,9 @@ final class SidebarCellView: NSTableCellView {
     private let icon = NSImageView()
     private let label = NSTextField(labelWithString: "")
     private let count = NSTextField(labelWithString: "")
+    private let eject = NSButton()
+    private var onEject: (() -> Void)?
+    private lazy var ejectWidth = eject.widthAnchor.constraint(equalToConstant: 0)
 
     init(identifier: NSUserInterfaceItemIdentifier, isSection: Bool) {
         super.init(frame: .zero)
@@ -418,22 +467,47 @@ final class SidebarCellView: NSTableCellView {
         count.textColor = .tertiaryLabelColor
         count.translatesAutoresizingMaskIntoConstraints = false
         count.setContentCompressionResistancePriority(.required, for: .horizontal)
+        eject.isBordered = false
+        eject.imagePosition = .imageOnly
+        eject.image = NSImage(systemSymbolName: "eject.fill", accessibilityDescription: "Eject")
+        eject.contentTintColor = .secondaryLabelColor
+        eject.target = self
+        eject.action = #selector(ejectClicked)
+        eject.isHidden = true
+        eject.setAccessibilityLabel("Eject")
+        eject.translatesAutoresizingMaskIntoConstraints = false
         addSubview(icon)
         addSubview(label)
         addSubview(count)
+        addSubview(eject)
         NSLayoutConstraint.activate([
+            eject.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
+            eject.centerYAnchor.constraint(equalTo: centerYAnchor),
+            ejectWidth,
             icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
             icon.widthAnchor.constraint(equalToConstant: 18),
             label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 5),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
             label.trailingAnchor.constraint(lessThanOrEqualTo: count.leadingAnchor, constant: -4),
-            count.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            count.trailingAnchor.constraint(equalTo: eject.leadingAnchor, constant: -2),
             count.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    @objc private func ejectClicked() { onEject?() }
+
+    /// A device row's Eject button: dimmed while an export is writing to it.
+    @MainActor
+    func configureEject(enabled: Bool, action: @escaping () -> Void) {
+        eject.isHidden = false
+        ejectWidth.constant = 16
+        eject.isEnabled = enabled
+        eject.toolTip = enabled ? "Eject" : DevicesModel.busyMessage
+        onEject = action
+    }
 
     /// Turns the name into an editable field with its text selected.
     @MainActor
@@ -460,6 +534,10 @@ final class SidebarCellView: NSTableCellView {
         icon.image = NSImage(systemSymbolName: node.symbol, accessibilityDescription: nil)
         label.textColor = node.kind == .note ? .tertiaryLabelColor : .labelColor
         icon.isHidden = node.kind == .note
-        count.stringValue = shown.map { String($0) } ?? ""
+        count.stringValue = node.detail ?? shown.map { String($0) } ?? ""
+        eject.isHidden = true
+        ejectWidth.constant = 0
+        onEject = nil
+        toolTip = nil
     }
 }

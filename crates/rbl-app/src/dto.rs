@@ -385,6 +385,18 @@ pub struct DeviceSyncStateDto {
     pub automatic: bool,
 }
 
+/// What reading a stick back with the independent parser found.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VerifyReportDto {
+    pub tracks: u32,
+    pub playlists: u32,
+    pub missing_audio: Vec<String>,
+    pub errors: Vec<String>,
+    /// The databases parse, every track has its audio, and nothing was reported wrong.
+    pub ok: bool,
+}
+
 /// One step of a sync, as the `sync:progress` event carries it.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

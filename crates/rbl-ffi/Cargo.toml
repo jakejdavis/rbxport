@@ -26,6 +26,7 @@ required-features = ["cli"]
 rbl-app = { path = "../rbl-app" }
 rbl-db = { path = "../rbl-db" }
 rbl-deck = { path = "../rbl-deck" }
+rbl-export = { path = "../rbl-export" }
 rbl-index = { path = "../rbl-index" }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

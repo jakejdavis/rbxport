@@ -9,9 +9,12 @@ enum TrackDrag {
     @MainActor
     static func pasteboardItem(id: String, path: String?, canEdit: Bool) -> NSPasteboardItem? {
         let fileURL = path.flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
-        guard canEdit || fileURL != nil else { return nil }
+        let exportable = !id.isEmpty && !id.hasPrefix("file:")
+        guard canEdit || fileURL != nil || exportable else { return nil }
         let item = NSPasteboardItem()
         if canEdit { item.setString(id, forType: .rbxportTracks) }
+        // A device takes a track whether or not the library may be edited.
+        if exportable { item.setString(id, forType: .rbxportExportTracks) }
         if let fileURL { item.setString(fileURL.absoluteString, forType: .fileURL) }
         return item
     }

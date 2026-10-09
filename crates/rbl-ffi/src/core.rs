@@ -8,10 +8,11 @@ use std::time::Instant;
 use rbl_app::dto::LibraryProblemDto;
 use rbl_app::error::run_command;
 use rbl_app::state::AppState;
-use rbl_app::{analysis, browse, cues, details, edits, explorer, grid, import, maintenance, media, startup, track_data, track_edits, AppError, AppEvent, AppResult, EventSink};
+use rbl_app::{analysis, browse, cues, details, device_settings, devices, edits, explorer, export, grid, import, maintenance, media, startup, track_data, track_edits, AppError, AppEvent, AppResult, EventSink};
 use rbl_db::{Library as Db, LibraryLocation, OpenMode};
 
 use crate::error::FfiError;
+use crate::devices::{DeviceSettings, DeviceSyncState, ExportOptions, ExportProgress, ExportReport, MissingExportFile, SyncDeviceReport, VerifyReport};
 use crate::events::{EventListener, ListenerSink};
 use crate::playback::{Playback, PlaybackListener};
 use crate::types::{
@@ -32,6 +33,9 @@ pub struct Core {
     /// Grid histories and analysis backups, beside the library backups.
     editor: Arc<grid::GridEditor>,
     sink: ListenerSink,
+    listener: Arc<dyn EventListener>,
+    /// Raises `DevicesChanged` while it lives; started by `start_device_watcher`.
+    watcher: std::sync::Mutex<Option<rbl_app::devices::MountWatcher>>,
     source: Source,
 }
 
@@ -85,7 +89,9 @@ impl Core {
         Arc::new(Self {
             state,
             editor,
-            sink: ListenerSink(listener),
+            sink: ListenerSink(Arc::clone(&listener)),
+            listener,
+            watcher: std::sync::Mutex::new(None),
             source: Source::Installed { cache_dir: cache_dir.map(PathBuf::from) },
         })
     }
@@ -100,7 +106,9 @@ impl Core {
         Arc::new(Self {
             state,
             editor,
-            sink: ListenerSink(listener),
+            sink: ListenerSink(Arc::clone(&listener)),
+            listener,
+            watcher: std::sync::Mutex::new(None),
             source: Source::Fixture { dir },
         })
     }
@@ -182,6 +190,110 @@ impl Core {
     /// Mounted volumes an export could be written to. Reads each one; call when shown.
     pub fn list_devices(&self) -> Result<Vec<Device>, FfiError> {
         ffi("list_devices", || Ok(browse::list_devices())).map(|d| d.into_iter().map(Into::into).collect())
+    }
+
+    // ---- Phase 5a: devices, export, sync, device settings. Only ever write to a stick.
+
+    /// Starts watching for volumes arriving and leaving; each change raises `DevicesChanged`.
+    /// Safe to call again. Honours `RB_LITE_FAKE_VOLUMES` (the watcher reads the same list).
+    pub fn start_device_watcher(&self) {
+        let mut slot = self.watcher.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if slot.is_none() {
+            *slot = Some(devices::start_mount_watcher(Arc::new(ListenerSink(Arc::clone(&self.listener)))));
+        }
+    }
+
+    /// Ejects a volume. Refused while an export to it is running or finishing.
+    pub fn eject_device(&self, path: String) -> Result<(), FfiError> {
+        ffi("eject_device", || export::eject_device(&path))
+    }
+
+    /// Reads a stick's settings; a stick that holds nothing answers with defaults and no flags.
+    pub fn device_settings(&self, path: String) -> Result<DeviceSettings, FfiError> {
+        ffi("device_settings", || Ok(device_settings::device_settings(&path))).map(Into::into)
+    }
+
+    /// Writes a stick's settings and returns what it now holds.
+    pub fn save_device_settings(&self, path: String, settings: DeviceSettings) -> Result<DeviceSettings, FfiError> {
+        ffi("save_device_settings", || device_settings::save_device_settings(&path, &settings.into())).map(Into::into)
+    }
+
+    /// Writes a playlist to a stick. Blocking; raises `ExportProgress` then `ExportDone`.
+    pub fn export_playlist_to_device(
+        &self,
+        playlist_id: String,
+        destination: String,
+        options: ExportOptions,
+    ) -> Result<ExportReport, FfiError> {
+        let defaults = options.defaults.into();
+        ffi("export_playlist_to_device", || {
+            export::export_playlist(
+                &self.state, &self.sink, &playlist_id, &destination, Some(&defaults),
+                options.delete_unlisted_music, options.compatibility.map(Into::into),
+            )
+        })
+        .map(Into::into)
+    }
+
+    /// Export Track: puts tracks on a stick in no playlist. Blocking.
+    pub fn export_tracks_to_device(
+        &self,
+        track_ids: Vec<String>,
+        destination: String,
+        options: ExportOptions,
+    ) -> Result<ExportReport, FfiError> {
+        let defaults = options.defaults.into();
+        ffi("export_tracks_to_device", || {
+            export::export_tracks_to_device(
+                &self.state, &self.sink, &track_ids, &destination, Some(&defaults), options.compatibility.map(Into::into),
+            )
+        })
+        .map(Into::into)
+    }
+
+    /// Writes the same playlists to every destination at once; one failing does not stop the rest.
+    /// Blocking; raises `SyncProgress` and each stick's `ExportProgress`. Never turns on "automatic".
+    pub fn sync_devices(
+        &self,
+        playlist_ids: Vec<String>,
+        destinations: Vec<String>,
+        options: ExportOptions,
+    ) -> Result<Vec<SyncDeviceReport>, FfiError> {
+        let defaults = options.defaults.into();
+        let sync = export::SyncOptions {
+            automatic: false,
+            eject_after_sync: options.eject_after_sync,
+            delete_unlisted_music: options.delete_unlisted_music,
+            compatibility_format: options.compatibility.map(Into::into),
+        };
+        ffi("sync_devices", || export::sync_devices(&self.state, &self.sink, &playlist_ids, destinations, Some(&defaults), &sync))
+            .map(|reports| reports.into_iter().map(Into::into).collect())
+    }
+
+    /// Tracks of these playlists whose audio file is gone; no stick is touched.
+    pub fn validate_export_files(&self, playlist_ids: Vec<String>) -> Result<Vec<MissingExportFile>, FfiError> {
+        ffi("validate_export_files", || export::validate_export_files(&self.state, &playlist_ids))
+            .map(|files| files.into_iter().map(Into::into).collect())
+    }
+
+    /// What a stick was last synced with and what it holds. Blocking (reads the stick).
+    pub fn device_sync_state(&self, path: String) -> Result<DeviceSyncState, FfiError> {
+        ffi("device_sync_state", || export::device_sync_state(&self.state, &path)).map(Into::into)
+    }
+
+    /// Reads a stick back with the independent parser. Read-only; blocking.
+    pub fn verify_device(&self, path: String) -> Result<VerifyReport, FfiError> {
+        ffi("verify_device", || export::verify_device(&path)).map(Into::into)
+    }
+
+    /// Asks the export to a stick to stop (between tracks, before publishing).
+    pub fn cancel_export(&self, path: String) {
+        export::cancel_export(&path);
+    }
+
+    /// Every export's latest progress, for a UI that starts late.
+    pub fn export_progress(&self) -> Vec<ExportProgress> {
+        export::export_progress().into_iter().map(Into::into).collect()
     }
 
     /// Writes a playlist to `path`; returns the track count written.

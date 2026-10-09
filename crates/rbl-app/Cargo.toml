@@ -24,6 +24,9 @@ dirs = "5"
 rbl-prolink = { path = "../rbl-prolink" }
 rbl-link = { path = "../rbl-link" }
 rbl-devices = { path = "../rbl-devices" }
+rbl-export = { path = "../rbl-export" }
+rbl-pdb = { path = "../rbl-pdb" }
+rbl-onelibrary = { path = "../rbl-onelibrary" }
 rbl-deck = { path = "../rbl-deck" }
 rbl-backup = { path = "../rbl-backup" }
 parking_lot = "0.12"

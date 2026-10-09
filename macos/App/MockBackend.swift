@@ -110,6 +110,8 @@ actor MockBackend: BackendProtocol {
         "/mock/Music": ExplorerChildren(names: ["House", "Techno"], total: 2)
     ]
     var deviceList: [Device] = []
+    /// What the Phase 5a device, export and sync calls answer, and what they were asked.
+    var devices5a = MockDeviceScript()
     var filterValuesAnswer = FilterValues(
         bpms: [CountedBpm(value: 120, count: 50), CountedBpm(value: 128, count: 5)],
         keys: [CountedKey(value: "Am", count: 3), CountedKey(value: "C", count: 2)], tags: [])
@@ -982,4 +984,173 @@ extension MockBackend {
             return generation
         }
     }
+}
+
+
+// MARK: - Phase 5a: devices, export, sync
+
+/// Scripted answers and the call log of the device calls. Tests set the first group and read the second.
+struct MockDeviceScript: Sendable {
+    var exportReport = ExportReport(
+        tracks: 5, playlists: 1, bytesCopied: 5_000_000, analysisFiles: 5, reused: 0, removed: 0, playlistsAdded: 1,
+        playlistsRemoved: 0, skipped: [], verified: true)
+    /// The progress states an export walks through, with `total` tracks.
+    var steps: [ExportState] = [.preparing, .checking, .copying, .database, .verifying, .publishing, .done]
+    var total: UInt32 = 5
+    /// How long each step takes, so a test can look at the model mid-export.
+    var stepDelay: Duration = .zero
+    var exportFailure: FfiError?
+    var ejectFailure: FfiError?
+    var settings: [String: DeviceSettings] = [:]
+    var saveFailure: FfiError?
+    var syncOverrides: [String: SyncDeviceReport] = [:]
+    var missing: [MissingExportFile] = []
+    var syncStates: [String: DeviceSyncState] = [:]
+    var verifyAnswer = VerifyReport(tracks: 5, playlists: 1, missingAudio: [], errors: [], ok: true)
+    var progressSnapshot: [ExportProgress] = []
+
+    var calls: [String] = []
+    var ejected: [String] = []
+    var saved: [(path: String, settings: DeviceSettings)] = []
+    var cancelled: [String] = []
+    var watcherStarts = 0
+}
+
+extension MockBackend {
+    func scriptDevices(_ change: @Sendable (inout MockDeviceScript) -> Void) { change(&devices5a) }
+    func deviceCalls5a() -> [String] { devices5a.calls }
+    func ejectedPaths() -> [String] { devices5a.ejected }
+    func savedSettings() -> [(path: String, settings: DeviceSettings)] { devices5a.saved }
+    func cancelledPaths() -> [String] { devices5a.cancelled }
+    func watcherStartCount() -> Int { devices5a.watcherStarts }
+
+    static func blankSettings() -> DeviceSettings {
+        let slots: (Int64, Int64, Bool) -> MenuSlot = { id, item, visible in
+            MenuSlot(id: id, menuItem: item, name: "ITEM \(item)", seq: visible ? id : 0, visible: visible)
+        }
+        return DeviceSettings(
+            hasDeviceLibrary: true, hasOneLibrary: true, hasDevSetting: true, waveformColor: .threeBand,
+            waveformPosition: .center, overviewWaveform: .half, keyDisplay: .classic, hasLibrarySettings: true,
+            deviceName: "STICK", backgroundColorType: 0,
+            categories: [slots(1, 1, true), slots(2, 2, true), slots(3, 3, false), slots(4, 4, true)],
+            sorts: [slots(1, 25, true), slots(2, 26, true), slots(3, 5, true), slots(4, 11, false)],
+            subColumn: nil, colors: (1...8).map { ColorName(id: Int64($0), name: "Colour \($0)") })
+    }
+
+    func startDeviceWatcher() async { devices5a.watcherStarts += 1 }
+
+    func ejectDevice(path: String) async throws {
+        devices5a.calls.append("eject(\(path))")
+        if let failure = devices5a.ejectFailure { throw failure }
+        devices5a.ejected.append(path)
+        deviceList.removeAll { $0.path == path }
+        continuation.yield(.devicesChanged)
+    }
+
+    func deviceSettings(path: String) async throws -> DeviceSettings {
+        devices5a.calls.append("deviceSettings(\(path))")
+        return devices5a.settings[path] ?? Self.blankSettings()
+    }
+
+    func saveDeviceSettings(path: String, settings: DeviceSettings) async throws -> DeviceSettings {
+        devices5a.calls.append("saveDeviceSettings(\(path))")
+        if let failure = devices5a.saveFailure { throw failure }
+        var stored = settings
+        stored.deviceName = settings.deviceName.trimmingCharacters(in: .whitespaces)
+        stored.hasDevSetting = true
+        devices5a.settings[path] = stored
+        devices5a.saved.append((path, stored))
+        return stored
+    }
+
+    /// Walks the scripted progress for one destination, honouring a cancel asked meanwhile.
+    private func runExport(to path: String, title: String) async throws {
+        devices5a.cancelled.removeAll { $0 == path }
+        let steps = devices5a.steps
+        for (index, step) in steps.enumerated() {
+            if devices5a.stepDelay > .zero { try? await Task.sleep(for: devices5a.stepDelay) }
+            if devices5a.cancelled.contains(path), step != .done {
+                continuation.yield(
+                    .exportProgress(progress: ExportProgress(path: path, state: .cancelled, done: UInt32(index), total: devices5a.total, title: "")))
+                throw FfiError.Cancelled(message: "Export stopped.", detail: nil)
+            }
+            let done = step == .done ? devices5a.total : min(UInt32(index), devices5a.total)
+            continuation.yield(
+                .exportProgress(progress: ExportProgress(path: path, state: step, done: done, total: devices5a.total, title: step == .copying ? title : "")))
+        }
+    }
+
+    func exportPlaylistToDevice(playlistID: String, destination: String, options: ExportOptions) async throws -> ExportReport {
+        devices5a.calls.append("exportPlaylist(\(playlistID),\(destination),delete:\(options.deleteUnlistedMusic))")
+        if let failure = devices5a.exportFailure {
+            continuation.yield(
+                .exportProgress(progress: ExportProgress(path: destination, state: .failed, done: 0, total: 0, title: describe(failure))))
+            throw failure
+        }
+        try await runExport(to: destination, title: "Track 001")
+        continuation.yield(.exportDone(report: devices5a.exportReport))
+        return devices5a.exportReport
+    }
+
+    func exportTracksToDevice(trackIDs: [String], destination: String, options: ExportOptions) async throws -> ExportReport {
+        devices5a.calls.append("exportTracks(\(trackIDs.joined(separator: ",")),\(destination))")
+        if let failure = devices5a.exportFailure { throw failure }
+        try await runExport(to: destination, title: "Track 001")
+        continuation.yield(.exportDone(report: devices5a.exportReport))
+        return devices5a.exportReport
+    }
+
+    func syncDevices(playlistIDs: [String], destinations: [String], options: ExportOptions) async throws -> [SyncDeviceReport] {
+        devices5a.calls.append("sync(\(playlistIDs.joined(separator: ",")) -> \(destinations.joined(separator: ",")),eject:\(options.ejectAfterSync))")
+        var reports: [SyncDeviceReport] = []
+        // The core writes every stick at once: all of them announce themselves before any finishes.
+        for path in destinations {
+            continuation.yield(.syncProgress(progress: SyncProgress(path: path, state: .writing)))
+            continuation.yield(.exportProgress(progress: ExportProgress(path: path, state: .preparing, done: 0, total: devices5a.total, title: "")))
+        }
+        for path in destinations {
+            if let override = devices5a.syncOverrides[path] {
+                continuation.yield(.syncProgress(progress: SyncProgress(path: path, state: override.error == nil ? .done : .failed)))
+                reports.append(override)
+                continue
+            }
+            do {
+                try await runExport(to: path, title: "Track 001")
+            } catch {
+                continuation.yield(.syncProgress(progress: SyncProgress(path: path, state: .failed)))
+                reports.append(SyncDeviceReport(path: path, report: nil, error: describe(error), ejected: false, ejectError: nil))
+                continue
+            }
+            var ejected = false
+            if options.ejectAfterSync {
+                continuation.yield(.syncProgress(progress: SyncProgress(path: path, state: .ejecting)))
+                ejected = true
+                devices5a.ejected.append(path)
+                deviceList.removeAll { $0.path == path }
+                continuation.yield(.devicesChanged)
+            }
+            continuation.yield(.syncProgress(progress: SyncProgress(path: path, state: .done)))
+            reports.append(SyncDeviceReport(path: path, report: devices5a.exportReport, error: nil, ejected: ejected, ejectError: nil))
+        }
+        return reports
+    }
+
+    func validateExportFiles(playlistIDs: [String]) async throws -> [MissingExportFile] {
+        devices5a.calls.append("validate(\(playlistIDs.joined(separator: ",")))")
+        return devices5a.missing
+    }
+
+    func deviceSyncState(path: String) async throws -> DeviceSyncState {
+        devices5a.calls.append("syncState(\(path))")
+        return devices5a.syncStates[path] ?? DeviceSyncState(selected: [], onDevice: [], libraries: [], automatic: false)
+    }
+
+    func verifyDevice(path: String) async throws -> VerifyReport {
+        devices5a.calls.append("verify(\(path))")
+        return devices5a.verifyAnswer
+    }
+
+    func cancelExport(path: String) async { devices5a.cancelled.append(path) }
+
+    func exportProgress() async -> [ExportProgress] { devices5a.progressSnapshot }
 }

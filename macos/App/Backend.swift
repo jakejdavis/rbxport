@@ -117,6 +117,27 @@ protocol BackendProtocol: Sendable {
     /// Re-reads the library once, after a run of analyses.
     func reloadLibrary() async throws -> UInt32
     func recordPlay(trackID: String) async throws -> UInt32
+
+    // MARK: Phase 5a: devices, export, sync, device settings. These write to a stick, never the library.
+
+    /// Starts the mount watcher, which raises `.devicesChanged`. Safe to call twice.
+    func startDeviceWatcher() async
+    /// Ejects a volume. Refused while an export to it is running.
+    func ejectDevice(path: String) async throws
+    func deviceSettings(path: String) async throws -> DeviceSettings
+    func saveDeviceSettings(path: String, settings: DeviceSettings) async throws -> DeviceSettings
+    /// Blocking in the core; raises `.exportProgress` then `.exportDone`.
+    func exportPlaylistToDevice(playlistID: String, destination: String, options: ExportOptions) async throws -> ExportReport
+    func exportTracksToDevice(trackIDs: [String], destination: String, options: ExportOptions) async throws -> ExportReport
+    /// One stick failing does not stop the others; raises `.syncProgress` and each stick's `.exportProgress`.
+    func syncDevices(playlistIDs: [String], destinations: [String], options: ExportOptions) async throws -> [SyncDeviceReport]
+    func validateExportFiles(playlistIDs: [String]) async throws -> [MissingExportFile]
+    func deviceSyncState(path: String) async throws -> DeviceSyncState
+    /// Reads a stick back with the independent parser.
+    func verifyDevice(path: String) async throws -> VerifyReport
+    func cancelExport(path: String) async
+    /// Every export's latest progress, for a UI that starts late.
+    func exportProgress() async -> [ExportProgress]
 }
 
 /// Forwards the Rust core's callbacks into an `AsyncStream`.
@@ -316,6 +337,53 @@ actor Backend: BackendProtocol {
         return try await Task.detached { try core.reloadLibrary() }.value
     }
     func recordPlay(trackID: String) async throws -> UInt32 { try core.recordPlay(trackId: trackID) }
+
+    func startDeviceWatcher() async { core.startDeviceWatcher() }
+    func ejectDevice(path: String) async throws {
+        let core = core
+        try await Task.detached { try core.ejectDevice(path: path) }.value
+    }
+    func deviceSettings(path: String) async throws -> DeviceSettings {
+        let core = core
+        return try await Task.detached { try core.deviceSettings(path: path) }.value
+    }
+    func saveDeviceSettings(path: String, settings: DeviceSettings) async throws -> DeviceSettings {
+        let core = core
+        return try await Task.detached { try core.saveDeviceSettings(path: path, settings: settings) }.value
+    }
+    // Exports copy audio over USB: they leave the actor so reads are not queued behind them.
+    func exportPlaylistToDevice(playlistID: String, destination: String, options: ExportOptions) async throws -> ExportReport {
+        let core = core
+        return try await Task.detached {
+            try core.exportPlaylistToDevice(playlistId: playlistID, destination: destination, options: options)
+        }.value
+    }
+    func exportTracksToDevice(trackIDs: [String], destination: String, options: ExportOptions) async throws -> ExportReport {
+        let core = core
+        return try await Task.detached {
+            try core.exportTracksToDevice(trackIds: trackIDs, destination: destination, options: options)
+        }.value
+    }
+    func syncDevices(playlistIDs: [String], destinations: [String], options: ExportOptions) async throws -> [SyncDeviceReport] {
+        let core = core
+        return try await Task.detached {
+            try core.syncDevices(playlistIds: playlistIDs, destinations: destinations, options: options)
+        }.value
+    }
+    func validateExportFiles(playlistIDs: [String]) async throws -> [MissingExportFile] {
+        let core = core
+        return try await Task.detached { try core.validateExportFiles(playlistIds: playlistIDs) }.value
+    }
+    func deviceSyncState(path: String) async throws -> DeviceSyncState {
+        let core = core
+        return try await Task.detached { try core.deviceSyncState(path: path) }.value
+    }
+    func verifyDevice(path: String) async throws -> VerifyReport {
+        let core = core
+        return try await Task.detached { try core.verifyDevice(path: path) }.value
+    }
+    func cancelExport(path: String) async { core.cancelExport(path: path) }
+    func exportProgress() async -> [ExportProgress] { core.exportProgress() }
 }
 
 func describe(_ error: Error) -> String {

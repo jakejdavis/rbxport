@@ -310,11 +310,8 @@ pub fn run() {
             // A stick plugged in or pulled out is noticed within a couple of
             // seconds, focused or not; the panel refreshes itself on the event.
             {
-                let emitter = app.handle().clone();
-                let mounts = rbl_devices::MountWatcher::start(rbl_devices::mounts::INTERVAL, move || {
-                    let _ = tauri::Emitter::emit(&emitter, "devices:changed", ());
-                });
-                app.manage(mounts);
+                let sink: Arc<dyn rbl_app::EventSink> = Arc::new(TauriSink(app.handle().clone()));
+                app.manage(rbl_app::devices::start_mount_watcher(sink));
             }
             app.set_menu(crate::menu::build(app.handle())?)?;
             Ok(())

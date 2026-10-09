@@ -36,6 +36,8 @@ final class SidebarNode {
     var childCount: UInt32?
     /// The directory, for Explorer rows; the mount point, for devices.
     var path: String?
+    /// A short line beside the name (a device's free space).
+    var detail: String?
     var children: [SidebarNode] = []
     /// Explorer folders load their children when first expanded.
     var childrenLoaded = false
@@ -65,7 +67,7 @@ final class SidebarNode {
 
     var isSelectable: Bool {
         switch kind {
-        case .section, .note, .device: false
+        case .section, .note: false
         default: true
         }
     }
@@ -97,7 +99,7 @@ final class SidebarNode {
         case .explorerRoot: "internaldrive"
         case .explorerFolder: "folder"
         case .note: "ellipsis"
-        case .device: "externaldrive.badge.checkmark"
+        case .device: "externaldrive.fill"
         case .tagList: "tag"
         }
     }
@@ -146,6 +148,8 @@ final class SidebarModel {
 
     @ObservationIgnored let defaults: UserDefaults
     @ObservationIgnored private let backend: any BackendProtocol
+    /// Called with the list whenever the devices are set, so the device list model can follow.
+    @ObservationIgnored var onDevices: ([Device]) -> Void = { _ in }
     /// Called after an Explorer folder's children arrive, so the outline can reload just that row.
     @ObservationIgnored var onNodeReloaded: (SidebarNode) -> Void = { _ in }
 
@@ -269,18 +273,24 @@ final class SidebarModel {
         version += 1
     }
 
+    /// Redraws the rows without changing their structure (a device became busy or free).
+    func reloadRows() { version += 1 }
+
     func setDevices(_ devices: [Device]) {
         let section = section(.devices)
         if devices.isEmpty {
             section.children = [Self.noDevicesNote(parent: section)]
         } else {
             section.children = devices.map {
-                let node = SidebarNode(id: "dev:\($0.volumeId)", kind: .device, name: $0.name, path: $0.path)
+                // The mount point names a device: volume ids repeat across fake and cloned volumes.
+                let node = SidebarNode(id: "dev:\($0.path)", kind: .device, name: $0.name, path: $0.path)
+                node.detail = $0.totalBytes > 0 ? "\(CellFormat.bytes($0.freeBytes)) free" : nil
                 node.parent = section
                 return node
             }
         }
         version += 1
+        onDevices(devices)
     }
 
     /// Re-lists the mounted volumes. Cheap enough to run when the library loads or the section opens.

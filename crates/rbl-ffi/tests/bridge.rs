@@ -5,7 +5,8 @@ use std::sync::{Arc, Mutex};
 use rbl_db::fixture::playlist_id;
 use rbl_ffi::{
     Core, EventListener, ExtraColumn, FfiError, LibraryEvent, LoadOutcome, NodeKind, SearchField, SortKey,
-    AnalysisSettings, BpmFilter, CueSlot, GridEdit, PlaylistFileFormat, TrackFilter, TrackSource, ViewSpec, MAX_ROWS,
+    AnalysisSettings, BpmFilter, CueSlot, ExportOptions, ExportState, GridEdit, KeyDisplay, StickOverview, PlaylistFileFormat, StickDefaults,
+    SyncState, TrackFilter, TrackSource, ViewSpec, WaveformColor, WaveformPosition, MAX_ROWS,
 };
 
 #[derive(Default)]
@@ -538,6 +539,99 @@ fn analysis_cues_grid_and_plays_pass_the_gate_over_the_bridge() {
     core.record_play(track.clone()).unwrap();
 }
 
+fn stick_options(eject: bool) -> ExportOptions {
+    ExportOptions {
+        defaults: StickDefaults {
+            waveform_color: WaveformColor::ThreeBand,
+            waveform_position: WaveformPosition::Center,
+            overview_waveform: StickOverview::Half,
+            key_display: KeyDisplay::Classic,
+        },
+        delete_unlisted_music: false,
+        compatibility: None,
+        eject_after_sync: eject,
+    }
+}
+
+/// Sticks here are temp directories and fake volumes; nothing real is exported to or ejected.
+#[test]
+fn devices_export_sync_and_settings_work_over_the_bridge_on_fake_sticks() {
+    let (dir, core, events) = core();
+    core.set_protect_library(false);
+    let audio = dir.path().join("incoming");
+    std::fs::create_dir_all(&audio).unwrap();
+    click_wav(&audio.join("one.wav"), 2);
+    click_wav(&audio.join("two.wav"), 2);
+    let imported = core.import_files(vec![audio.display().to_string()]).unwrap();
+    let ids: Vec<String> = imported.tracks.iter().map(|t| t.id.clone()).collect();
+    let playlist = core.create_playlist("Gig".into(), "root".into()).unwrap();
+    core.add_tracks_to_playlist(playlist.clone(), ids.clone()).unwrap();
+
+    let sticks = tempfile::tempdir().unwrap();
+    let (one, two) = (sticks.path().join("ONE"), sticks.path().join("TWO"));
+    std::fs::create_dir_all(&one).unwrap();
+    std::fs::create_dir_all(&two).unwrap();
+    std::env::set_var("RB_LITE_FAKE_VOLUMES", format!("{}:{}", one.display(), two.display()));
+    let devices = core.list_devices().unwrap();
+    assert_eq!(devices.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(), ["ONE", "TWO"]);
+    assert!(devices.iter().all(|d| d.export.is_none()));
+
+    assert!(core.validate_export_files(vec![playlist.clone()]).unwrap().is_empty());
+    let (one_path, two_path) = (one.display().to_string(), two.display().to_string());
+    let report = core.export_playlist_to_device(playlist.clone(), one_path.clone(), stick_options(false)).unwrap();
+    assert_eq!((report.tracks, report.playlists, report.verified), (2, 1, true));
+    let seen = events.0.lock().unwrap().clone();
+    let states: Vec<ExportState> = seen.iter().filter_map(|e| match e {
+        LibraryEvent::ExportProgress { progress } if progress.path == one_path => Some(progress.state),
+        _ => None,
+    }).collect();
+    assert_eq!(states.first(), Some(&ExportState::Preparing));
+    assert_eq!(states.last(), Some(&ExportState::Done));
+    assert!(matches!(seen.last(), Some(LibraryEvent::ExportDone { report: r }) if r.tracks == 2));
+    assert_eq!(core.export_progress().iter().find(|p| p.path == one_path).unwrap().state, ExportState::Done);
+
+    // The listing now says the stick holds our export; the panel's settings read the stick.
+    let listed = core.list_devices().unwrap();
+    assert_eq!(listed[0].export.as_ref().map(|e| (e.tracks, e.ours)), Some((2, true)));
+    let settings = core.device_settings(one_path.clone()).unwrap();
+    assert!(settings.has_device_library && settings.has_dev_setting);
+    assert_eq!(settings.waveform_color, WaveformColor::ThreeBand);
+    let mut edited = settings.clone();
+    edited.waveform_color = WaveformColor::Rgb;
+    edited.device_name = "GIG STICK".into();
+    let saved = core.save_device_settings(one_path.clone(), edited).unwrap();
+    assert_eq!(saved.waveform_color, WaveformColor::Rgb);
+    assert_eq!(saved.device_name, "GIG STICK");
+
+    // A sync to both: SyncProgress goes writing -> done for each, and the selection comes back.
+    events.0.lock().unwrap().clear();
+    let reports = core.sync_devices(vec![playlist.clone()], vec![one_path.clone(), two_path.clone()], stick_options(true)).unwrap();
+    assert!(reports.iter().all(|r| r.error.is_none() && r.report.as_ref().is_some_and(|x| x.verified)));
+    assert!(reports.iter().all(|r| !r.ejected), "a temp dir is not a volume the OS will eject");
+    let sync: Vec<(String, SyncState)> = events.0.lock().unwrap().iter().filter_map(|e| match e {
+        LibraryEvent::SyncProgress { progress } => Some((progress.path.clone(), progress.state)),
+        _ => None,
+    }).collect();
+    for path in [&one_path, &two_path] {
+        let mine: Vec<SyncState> = sync.iter().filter(|(p, _)| p == path).map(|(_, s)| *s).collect();
+        assert_eq!(mine.first(), Some(&SyncState::Writing));
+        assert_eq!(mine.last(), Some(&SyncState::Done));
+    }
+    let verified = core.verify_device(two_path.clone()).unwrap();
+    assert!(verified.ok && verified.tracks == 2);
+    let state = core.device_sync_state(two_path.clone()).unwrap();
+    assert_eq!(state.selected.len(), 1);
+    assert_eq!(state.on_device, ["Gig"]);
+    assert!(!state.automatic);
+
+    // Eject: refused while a job is in flight is covered in rbl-app; here, a non-volume is refused.
+    assert!(core.eject_device(one_path).is_err());
+    // The watcher starts once however often it is asked (its events are covered in rbl-app).
+    core.start_device_watcher();
+    core.start_device_watcher();
+    std::env::remove_var("RB_LITE_FAKE_VOLUMES");
+}
+
 /// Prepares a fixture directory for the manual screenshot run: a 40 s click track on the first
 /// track, ready to analyse. Run with `RBXPORT_PREP_DIR=<empty temp dir> cargo test -p rbl-ffi
 /// --test bridge prepare_demo_fixture -- --ignored`. Refuses anything but a fixture.
@@ -550,4 +644,20 @@ fn prepare_demo_fixture() {
     let wav = dir.join("demo-click.wav");
     click_wav(&wav, 40);
     rbl_db::fixture::point_at_audio(&location, 0, wav.to_str().unwrap(), 40).unwrap();
+}
+
+/// Prepares a fixture directory for the Phase 5a screenshot run: the first playlist's five
+/// tracks point at short real WAVs, so an export has audio to copy. Run with
+/// `RBXPORT_PREP_DIR=<empty temp dir> cargo test -p rbl-ffi --test bridge prepare_devices_fixture -- --ignored`.
+#[test]
+#[ignore = "manual fixture preparation"]
+fn prepare_devices_fixture() {
+    let dir = std::path::PathBuf::from(std::env::var("RBXPORT_PREP_DIR").expect("RBXPORT_PREP_DIR"));
+    let location = rbl_db::fixture::build(&dir, rbl_db::fixture::Shape::default()).unwrap();
+    assert!(!location.is_real_install);
+    for index in 0..5 {
+        let wav = dir.join(format!("demo-track-{index}.wav"));
+        click_wav(&wav, 6);
+        rbl_db::fixture::point_at_audio(&location, index, wav.to_str().unwrap(), 6).unwrap();
+    }
 }
