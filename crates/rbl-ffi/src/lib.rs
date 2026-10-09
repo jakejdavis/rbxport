@@ -14,12 +14,18 @@
 
 mod convert;
 mod core;
+mod devices;
 mod error;
 mod events;
 mod playback;
 mod types;
 
 pub use crate::core::Core;
+pub use devices::{
+    ColorName, CompatibilityFormat, DeviceLibraryTree, DevicePlaylistNode, DeviceSettings, DeviceSyncState, ExportOptions, ExportProgress,
+    ExportReport, ExportState, KeyDisplay, MenuSlot, MissingExportFile, StickOverview, StickDefaults, SyncDeviceReport, SyncPlaylist,
+    SyncProgress, SyncState, VerifyReport, WaveformColor, WaveformPosition,
+};
 pub use error::FfiError;
 pub use events::{EventListener, LibraryEvent};
 pub use playback::{

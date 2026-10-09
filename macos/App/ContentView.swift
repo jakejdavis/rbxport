@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         @Bindable var model = model
@@ -28,6 +29,7 @@ struct ContentView: View {
             } detail: {
                 DetailView()
             }
+            .onChange(of: model.syncWindowRequests) { openWindow(id: SyncManagerScene.id) }
             .sheet(item: $model.smartEditor) { editor in
                 SmartEditorSheet(
                     editor: editor, save: { Task { await model.saveSmartEditor(editor) } },
@@ -118,11 +120,19 @@ struct DetailView: View {
                 PanelDivider(player: model.player)
             }
             VStack(spacing: 0) {
-                if model.filterBarOpen {
+                if let device = model.selectedDevice, let panel = model.devicePanel {
+                    // A device is selected: its settings take the place of the track table.
+                    DevicePanelView(
+                        device: device, model: panel, playlists: model.sidebar.playlistTargets(),
+                        exportPlaylist: { id in Task { await model.exportPlaylist(id: id, to: device.path) } },
+                        busy: model.exportJobs.isActive(path: device.path))
+                } else if model.filterBarOpen {
                     FilterBar(model: model)
                     Divider()
                 }
-                if let opened = model.opened {
+                if model.selectedDevice != nil && model.devicePanel != nil {
+                    EmptyView()
+                } else if let opened = model.opened {
                     TrackTable(
                         model: model, opened: opened, layout: model.layout, keyStyle: model.keyStyle,
                         sortKey: model.sortKey, descending: model.descending,
@@ -164,6 +174,9 @@ struct StatusLine: View {
             }
             if model.analysis.statusText != nil {
                 AnalysisStatusView(queue: model.analysis)
+            }
+            if model.exportJobs.statusText != nil {
+                ExportStatusView(model: model)
             }
             Spacer()
             if let notice = model.notice {
@@ -271,5 +284,31 @@ struct AnalysisStatusView: View {
         }
         .help(queue.failed.isEmpty ? "Analysis" : queue.failed.prefix(8).map { "\($0.title): \($0.reason)" }.joined(separator: "\n"))
         .accessibilityLabel(queue.statusText ?? "Analysis")
+    }
+}
+
+
+/// Export and sync progress in the status bar: a bar, what is happening, Stop while it can.
+struct ExportStatusView: View {
+    let model: AppModel
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let fraction = model.exportJobs.fraction {
+                ProgressView(value: fraction).progressViewStyle(.linear).frame(width: 90)
+            } else {
+                ProgressView().controlSize(.small)
+            }
+            Text(model.exportJobs.statusText ?? "").lineLimit(1).truncationMode(.middle).frame(maxWidth: 360, alignment: .leading)
+            if model.exportJobs.canStop {
+                Button("Stop", systemImage: "stop.circle") { model.cancelAllExports() }
+                    .labelStyle(.iconOnly).buttonStyle(.plain)
+                    .help("Stop after the current file operation finishes")
+            }
+            Button("Sync Manager", systemImage: "arrow.triangle.2.circlepath") { model.openSyncManager() }
+                .labelStyle(.iconOnly).buttonStyle(.plain).help("Open the Sync Manager")
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("export-progress")
     }
 }

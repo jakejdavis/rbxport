@@ -2,7 +2,7 @@
 use std::{collections::HashMap, path::{Path, PathBuf}, sync::Arc};
 use serde::Serialize;
 use tauri::{State, Manager};
-use crate::{commands::{blocking, reload, write_error}, dto::{DeviceLibraryTreeDto, DevicePlaylistNodeDto}, error::{AppError, AppResult, ErrorKind}, state::AppState};
+use crate::{commands::{blocking, reload, write_error}, error::{AppError, AppResult, ErrorKind}, state::AppState};
 
 fn err(e: impl std::fmt::Display) -> AppError {
     let detail = format!("USB import: {e}");
@@ -14,28 +14,8 @@ fn within(root: &Path, relative: &str) -> AppResult<PathBuf> {
     Ok(path)
 }
 
-pub fn library_trees(root: &Path) -> AppResult<Vec<DeviceLibraryTreeDto>> {
-    let export = rbl_devices::settings::export_root(root);
-    let mut libraries = Vec::new();
-    let pdb = export.join("rekordbox/export.pdb");
-    if pdb.exists() {
-        let bytes = std::fs::read(pdb).map_err(err)?;
-        let parsed = rbl_pdb::Pdb::parse(&bytes).map_err(err)?;
-        let mut nodes = parsed.table(rbl_pdb::PageType::PlaylistTree).map(|t| parsed.playlist_nodes(t)).unwrap_or_default();
-        nodes.sort_by_key(|n| (n.parent_id, n.sort_order));
-        libraries.push(DeviceLibraryTreeDto { name: "Device Library".into(), nodes: nodes.into_iter().map(|n| DevicePlaylistNodeDto {
-            id: n.id.to_string(), parent_id: n.parent_id.to_string(), name: n.name, folder: n.is_folder,
-        }).collect() });
-    }
-    let one = export.join("rekordbox/exportLibrary.db");
-    if one.exists() {
-        let db = rbl_onelibrary::ExportLibrary::open_read_only(&one).map_err(err)?;
-        let mut q = db.connection().prepare("SELECT playlist_id, COALESCE(playlist_id_parent,0), name, attribute FROM playlist ORDER BY sequenceNo").map_err(err)?;
-        let nodes = q.query_map([], |r| Ok(DevicePlaylistNodeDto { id: r.get::<_,i64>(0)?.to_string(), parent_id: r.get::<_,i64>(1)?.to_string(), name: r.get(2)?, folder: r.get::<_,i64>(3)? != 0 })).map_err(err)?.collect::<Result<Vec<_>,_>>().map_err(err)?;
-        libraries.push(DeviceLibraryTreeDto { name: "OneLibrary".into(), nodes });
-    }
-    Ok(libraries)
-}
+#[cfg(test)]
+use rbl_app::devices::library_trees;
 
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all="camelCase")]

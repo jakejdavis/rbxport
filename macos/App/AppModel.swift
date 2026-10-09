@@ -88,6 +88,7 @@ final class AppModel {
             if let id = selectedNodeID { layoutStore.defaults.set(id, forKey: SidebarModel.Keys.selected) }
             // A different source starts with nothing selected; the same one (after a reload) keeps its tracks.
             if selectedNodeID != currentNodeID { clearTrackSelection() }
+            updateDevicePanel()
             reopen()
         }
     }
@@ -133,6 +134,16 @@ final class AppModel {
     let player: PlayerModel
     /// Tracks waiting to be analysed, and how far the run has got.
     let analysis: AnalysisQueue
+    /// Phase 5a: where every export and sync has got to, the mounted volumes, and the export prefs.
+    let exportJobs: ExportJobsModel
+    let devices: DevicesModel
+    let exportPrefs: DeviceExportPrefs
+    /// The Sync Manager window's model.
+    private(set) var syncManager: SyncManagerModel!
+    /// The selected device's settings, while a device is selected.
+    private(set) var devicePanel: DeviceSettingsModel?
+    /// Bumped to ask the main window to open the Sync Manager window.
+    var syncWindowRequests = 0
     /// Tracks analysed in the current run, for the decks to redraw once the library is re-read.
     @ObservationIgnored var analysedResults: [AnalysisResult] = []
 
@@ -209,12 +220,30 @@ final class AppModel {
         waveformPalette = defaults.string(forKey: "waveformPalette").flatMap(WaveformPalette.init) ?? .bands
         player = PlayerModel(backend: backend, waveforms: waveforms, artwork: artwork, defaults: defaults)
         analysis = AnalysisQueue(backend: backend, defaults: defaults)
+        exportJobs = ExportJobsModel()
+        devices = DevicesModel(jobs: exportJobs)
+        exportPrefs = DeviceExportPrefs(defaults: defaults)
         info.setActive(infoPanelOpen)
         info.onEdit = { [weak self] edit, id in await self?.applyInfoEdit(edit, to: id) ?? false }
         onLoadToDeck = { [weak self] id, deck in
             guard let self else { return }
             self.player.load(trackID: id, row: self.loadedRow(id: id), into: deck)
         }
+        syncManager = SyncManagerModel(
+            backend: backend, sidebar: sidebar, devices: devices, jobs: exportJobs, prefs: exportPrefs,
+            dialogs: { [weak self] in self?.dialogs ?? .live }, notify: { [weak self] in self?.notice = $0 },
+            refreshDevices: { [weak self] in await self?.refreshDevices() })
+        exportJobs.nameFor = { [weak self] path in self?.devices.device(path: path)?.name ?? (path as NSString).lastPathComponent }
+        exportJobs.onActivityChange = { [weak self] in self?.sidebar.reloadRows() }
+        sidebar.onDevices = { [weak self] list in
+            self?.devices.set(list)
+            self?.updateDevicePanel()
+        }
+        player.exportTrackToDevice = { [weak self] id, path in
+            guard let self else { return }
+            Task { await self.exportTracks([id], to: path) }
+        }
+        player.deviceTargets = { [weak self] in self?.deviceTargets ?? [] }
         player.configureWrites { [weak self] in self?.canEdit ?? false }
         player.setWaveformPalette = { [weak self] palette in self?.waveformPalette = palette }
         player.analyseTracks = { [weak self] ids in self?.analyse(ids) }
@@ -255,6 +284,9 @@ final class AppModel {
         loadTask = Task {
             await backend.setProtectLibrary(protect)
             _ = await backend.loadLibrary()
+            // Volumes arriving and leaving raise `.devicesChanged`; jobs already running are adopted.
+            await backend.startDeviceWatcher()
+            exportJobs.seed(await backend.exportProgress())
         }
         startReadOnlyPolling()
     }
@@ -291,7 +323,14 @@ final class AppModel {
         case .cuesChanged, .gridChanged, .analysisChanged:
             await handleEditEvent(event)
         case .devicesChanged:
-            break
+            await devicesChanged()
+        case .exportProgress(let progress):
+            exportJobs.handle(progress: progress)
+        case .syncProgress(let progress):
+            exportJobs.handle(sync: progress)
+        case .exportDone:
+            // The report comes back to whoever asked; the stick now holds an export.
+            await refreshDevices()
         }
     }
 
@@ -540,6 +579,18 @@ final class AppModel {
         }
     }
 
+    /// Opens, keeps or closes the device panel to follow the selected sidebar node.
+    func updateDevicePanel() {
+        guard let device = selectedDevice else {
+            devicePanel = nil
+            return
+        }
+        if devicePanel?.path == device.path { return }
+        let panel = DeviceSettingsModel(path: device.path, backend: backend)
+        devicePanel = panel
+        Task { await panel.load() }
+    }
+
     // MARK: Filter values
 
     /// Re-fetches the bar's lists when the source, query, scope or library changed since the last fetch.
@@ -585,7 +636,7 @@ final class AppModel {
             inExplorer: selectedNodeID?.hasPrefix("ex:") ?? false, editable: canEdit,
             playlists: sidebar.playlistTargets(), inPlaylist: openPlaylistID != nil,
             inHistory: openHistoryID != nil, hasLoose: selectedIDs.contains(where: Self.isLoose),
-            allLoose: !selectedIDs.isEmpty && selectedIDs.allSatisfy(Self.isLoose))
+            allLoose: !selectedIDs.isEmpty && selectedIDs.allSatisfy(Self.isLoose), devices: deviceTargets)
     }
 
     /// Runs a live entry of the track menu on the selection.
@@ -616,7 +667,10 @@ final class AppModel {
         case .setColor(let color):
             let ids = orderedSelection
             Task { await setColor(color, ids: ids) }
-        case .exportPlaylist, .createPlaylist, .createFolder, .createSmartPlaylist, .editSmartPlaylist, .rename, .delete,
+        case .exportTrackToDevice(let path):
+            let ids = orderedSelection
+            Task { await exportTracks(ids, to: path) }
+        case .exportToDevice, .ejectDevice, .openSyncManager, .exportPlaylist, .createPlaylist, .createFolder, .createSmartPlaylist, .editSmartPlaylist, .rename, .delete,
             .sortItems:
             break
         }

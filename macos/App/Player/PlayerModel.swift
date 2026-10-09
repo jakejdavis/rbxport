@@ -237,7 +237,17 @@ final class PlayerModel {
     /// Analyze Track from the deck menu; the app owns the queue.
     @ObservationIgnored var analyseTracks: (([String]) -> Void)?
 
+    /// Export Track from the deck menu; the app owns the devices and the export.
+    @ObservationIgnored var exportTrackToDevice: ((String, String) -> Void)?
+    /// The devices the deck menu offers.
+    @ObservationIgnored var deviceTargets: (() -> [DeviceTarget])?
+
     func chooseWaveformPalette(_ palette: WaveformPalette) { setWaveformPalette?(palette) }
+
+    /// The track loaded on a deck goes to the device at `path`, in no playlist.
+    func exportTrack(deck which: Deck, to path: String) {
+        if let id = deck(which).track?.id { exportTrackToDevice?(id, path) }
+    }
 
     func analyse(deck which: Deck) {
         if let id = deck(which).track?.id { analyseTracks?([id]) }

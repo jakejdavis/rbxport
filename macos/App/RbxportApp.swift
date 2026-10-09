@@ -57,6 +57,8 @@ struct RbxportApp: App {
                     .disabled(!model.canEdit)
             }
             CommandGroup(after: .importExport) {
+                Button("Sync Manager\u{2026}") { model.openSyncManager() }
+                    .keyboardShortcut("y", modifiers: [.command, .shift])
                 Menu("Import") {
                     Button("Track\u{2026}") { Task { await model.importFromPanel(folders: false) } }
                     Button("Folder\u{2026}") { Task { await model.importFromPanel(folders: true) } }
@@ -122,6 +124,11 @@ struct RbxportApp: App {
                     isOn: Binding(get: { model.sidebar.showChildCounts }, set: { model.sidebar.showChildCounts = $0 }))
             }
         }
+        Window("Sync Manager", id: SyncManagerScene.id) {
+            SyncManagerView(model: model.syncManager, devices: model.devices, jobs: model.exportJobs)
+                .environment(model)
+        }
+        .defaultSize(width: 900, height: 560)
         Settings {
             SettingsView(player: model.player, model: model)
         }
@@ -137,6 +144,13 @@ struct RbxportApp: App {
                 await model.waitUntilSettled()
                 try? await Task.sleep(for: .milliseconds(500))
                 await model.runDemoEdit(demo)
+            }
+        }
+        if let steps = env["RBXPORT_DEMO_DEVICES"] {
+            Task { @MainActor in
+                await model.waitUntilSettled()
+                try? await Task.sleep(for: .milliseconds(1200))
+                await model.runDeviceDemo(steps, environment: env)
             }
         }
         if env["RBXPORT_OPEN_SMART_EDITOR"] == "1" {

@@ -407,6 +407,9 @@ impl From<AppEvent> for LibraryEvent {
             AppEvent::ImportProgress(p) => Self::ImportProgress {
                 progress: ImportProgress { path: p.path, state: p.state.to_owned(), done: p.done, total: p.total, title: p.title },
             },
+            AppEvent::ExportProgress(p) => Self::ExportProgress { progress: p.into() },
+            AppEvent::ExportDone(report) => Self::ExportDone { report: report.into() },
+            AppEvent::SyncProgress(p) => Self::SyncProgress { progress: p.into() },
         }
     }
 }

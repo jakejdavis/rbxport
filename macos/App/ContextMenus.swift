@@ -33,6 +33,13 @@ enum MenuCommand: Equatable, Sendable {
     case analyse
     case analysisLock(Bool)
     case convertMemoryToHot
+    // Phase 5a: devices. The path is the device's mount point.
+    /// Export the playlist a tree node stands for to the device.
+    case exportToDevice(String)
+    /// Export the selected tracks to the device, in no playlist.
+    case exportTrackToDevice(String)
+    case ejectDevice
+    case openSyncManager
 }
 
 struct MenuItemSpec: Equatable {
@@ -88,6 +95,8 @@ enum ContextMenus {
         var hasLoose = false
         /// Every selected row is such a file.
         var allLoose = false
+        /// The devices "Export Track" offers.
+        var devices: [DeviceTarget] = []
     }
 
     /// Right-clicking a track, top to bottom as `TRACK_MENU` has it. Show in Finder, Show
@@ -121,7 +130,7 @@ enum ContextMenus {
             grey("Get Info from iTunes"),
             grey("Track Type", []),
             .separator,
-            grey("Export Track", []),
+            exportTrackMenu(context),
             .separator,
             grey("Auto Load Hot Cue", [grey("Enable Auto Load Hot Cue"), grey("Disable Auto Load Hot Cue")]),
             edit("Reset DJ Play Count", .resetPlayCount),
@@ -144,6 +153,24 @@ enum ContextMenus {
             grey("Track information", [grey("Publish"), grey("Do not publish")]),
         ]
         return rows
+    }
+
+    /// "Export Track ▸ device": live for tracks of the collection while a device is mounted.
+    private static func exportTrackMenu(_ context: TrackContext) -> MenuRow {
+        guard context.selectionCount > 0, !context.allLoose, !context.devices.isEmpty else { return grey("Export Track", []) }
+        return .item(
+            MenuItemSpec(
+                title: "Export Track", command: nil,
+                submenu: context.devices.map { live($0.name, .exportTrackToDevice($0.path)) }))
+    }
+
+    /// "Export Playlist ▸ device": one entry per mounted device.
+    private static func exportPlaylistMenu(_ devices: [DeviceTarget]) -> MenuRow {
+        guard !devices.isEmpty else { return grey("Export Playlist", []) }
+        return .item(
+            MenuItemSpec(
+                title: "Export Playlist", command: nil,
+                submenu: devices.map { live($0.name, .exportToDevice($0.path)) }))
     }
 
     /// "Color ▸": none, then the eight colours, each with its dot.
@@ -171,7 +198,9 @@ enum ContextMenus {
 
     /// The menu for a source-list node, or nil where rekordbox has none. The edit entries are
     /// live when `editable`, greyed otherwise.
-    static func treeMenu(for kind: SidebarNode.Kind, editable: Bool = false) -> [MenuRow]? {
+    static func treeMenu(
+        for kind: SidebarNode.Kind, editable: Bool = false, devices: [DeviceTarget] = [], deviceBusy: Bool = false
+    ) -> [MenuRow]? {
         func edit(_ title: String, _ command: MenuCommand) -> MenuRow { editable ? live(title, command) : grey(title) }
         switch kind {
         case .section(.playlists):
@@ -199,7 +228,7 @@ enum ContextMenus {
             ]
         case .playlist, .smartPlaylist:
             var rows: [MenuRow] = [
-                grey("Export Playlist", []),
+                exportPlaylistMenu(devices),
                 .separator,
                 edit("Create New Playlist", .createPlaylist),
             ]
@@ -226,6 +255,14 @@ enum ContextMenus {
                 grey("Add To Shortcut"),
             ]
             return rows
+        case .device:
+            return [
+                deviceBusy ? grey("Eject") : live("Eject", .ejectDevice),
+                .separator,
+                live("Sync Manager\u{2026}", .openSyncManager),
+            ]
+        case .section(.devices):
+            return [live("Sync Manager\u{2026}", .openSyncManager)]
         default:
             return nil
         }
