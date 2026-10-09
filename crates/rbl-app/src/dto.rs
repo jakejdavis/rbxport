@@ -581,3 +581,79 @@ pub struct DevicePlaylistNodeDto {
     pub name: String,
     pub folder: bool,
 }
+
+/// One track, in full. About 1 KB of JSON.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackDetailsDto {
+    pub id: String,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub album_artist: String,
+    pub original_artist: String,
+    pub composer: String,
+    pub remixer: String,
+    pub lyricist: String,
+    pub genre: String,
+    pub label: String,
+    pub key: String,
+    pub comment: String,
+    pub mix_name: String,
+    pub message: String,
+    /// `"0"` or empty for none, `"1"` to `"8"` for rekordbox's eight colours.
+    pub color: String,
+    pub rating: u8,
+    pub bpm_x100: u32,
+    pub duration_sec: u32,
+    pub year: u32,
+    pub track_number: u32,
+    pub disc_number: u32,
+    pub play_count: u32,
+    /// rekordbox's own code: 1 MP3, 4 M4A, 5 FLAC, 11 WAV, 12 AIFF.
+    pub file_type: u32,
+    pub file_size: u64,
+    pub bitrate: u32,
+    pub sample_rate: u32,
+    pub bit_depth: u32,
+    pub date_created: String,
+    pub release_date: String,
+    pub path: String,
+    pub hot_cue_auto_load: bool,
+    pub publish: bool,
+    /// Whether `rbl://localhost/artwork/<id>` will serve anything for this track.
+    pub has_artwork: bool,
+    /// The ids of the My Tags on the track.
+    pub my_tags: Vec<String>,
+}
+
+/// One My Tag, for the Info tab's toggles.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MyTagDto {
+    pub id: String,
+    pub name: String,
+}
+
+/// A My Tag category and the tags under it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MyTagCategoryDto {
+    pub name: String,
+    pub tags: Vec<MyTagDto>,
+}
+
+/// What the Info tab's dropdowns offer.
+///
+/// Keys and genres come from the index's interners — what the library holds
+/// — rather than a fixed list, because rekordbox's own dropdowns offer what
+/// the library holds. 25 keys and 448 genres in the reference library, well
+/// inside the response cap.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackLookupsDto {
+    pub keys: Vec<String>,
+    pub genres: Vec<String>,
+    /// The library's My Tags, by category, with the ids the toggles set.
+    pub my_tag_categories: Vec<MyTagCategoryDto>,
+}

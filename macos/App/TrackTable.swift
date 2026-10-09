@@ -11,6 +11,8 @@ struct TrackTable: NSViewRepresentable {
     let keyStyle: KeyStyle
     let sortKey: SortKey
     let descending: Bool
+    let palette: WaveformPalette
+    let rowHeight: CGFloat
 
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
 
@@ -21,7 +23,7 @@ struct TrackTable: NSViewRepresentable {
         table.allowsMultipleSelection = true
         table.allowsColumnReordering = true
         table.allowsColumnResizing = true
-        table.rowHeight = 22
+        table.rowHeight = rowHeight
         table.columnAutoresizingStyle = .noColumnAutoresizing
         table.dataSource = context.coordinator
         table.delegate = context.coordinator
@@ -38,14 +40,18 @@ struct TrackTable: NSViewRepresentable {
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = true
         scroll.autohidesScrollers = true
-        context.coordinator.update(opened: opened, layout: layout, keyStyle: keyStyle, sortKey: sortKey, descending: descending)
+        context.coordinator.update(
+            opened: opened, layout: layout, keyStyle: keyStyle, sortKey: sortKey, descending: descending,
+            palette: palette, rowHeight: rowHeight)
         return scroll
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         let coordinator = context.coordinator
         let viewChanged = coordinator.shownView != opened
-        coordinator.update(opened: opened, layout: layout, keyStyle: keyStyle, sortKey: sortKey, descending: descending)
+        coordinator.update(
+            opened: opened, layout: layout, keyStyle: keyStyle, sortKey: sortKey, descending: descending,
+            palette: palette, rowHeight: rowHeight)
         if viewChanged, let table = scroll.documentView as? NSTableView, table.numberOfRows > 0 {
             table.scrollRowToVisible(0)
         }
@@ -60,6 +66,7 @@ struct TrackTable: NSViewRepresentable {
         private(set) var shownView: OpenedView?
         private var layout = ColumnLayout.defaults(for: .collection)
         private var keyStyle = KeyStyle.classic
+        private var palette = WaveformPalette.bands
         // Guards against feeding our own changes back to the model.
         private var applying = false
         private var restoring = false
@@ -73,10 +80,19 @@ struct TrackTable: NSViewRepresentable {
 
         // MARK: Updating from the model
 
-        func update(opened: OpenedView, layout: ColumnLayout, keyStyle: KeyStyle, sortKey: SortKey, descending: Bool) {
+        func update(
+            opened: OpenedView, layout: ColumnLayout, keyStyle: KeyStyle, sortKey: SortKey, descending: Bool,
+            palette: WaveformPalette, rowHeight: CGFloat
+        ) {
             guard let table else { return }
             let styleChanged = keyStyle != self.keyStyle
+            let paletteChanged = palette != self.palette
             self.keyStyle = keyStyle
+            self.palette = palette
+            if table.rowHeight != rowHeight {
+                table.rowHeight = rowHeight
+                table.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<table.numberOfRows))
+            }
             applyColumns(layout)
             if shownView != opened {
                 shownView = opened
@@ -84,7 +100,7 @@ struct TrackTable: NSViewRepresentable {
                 table.reloadData()
                 table.deselectAll(nil)
                 applying = false
-            } else if styleChanged {
+            } else if styleChanged || paletteChanged {
                 table.reloadData(
                     forRowIndexes: IndexSet(integersIn: 0..<table.numberOfRows),
                     columnIndexes: IndexSet(integersIn: 0..<table.numberOfColumns))
@@ -150,7 +166,15 @@ struct TrackTable: NSViewRepresentable {
                 columnIndexes: IndexSet(integersIn: 0..<table.numberOfColumns))
             restoreSelection(in: range)
             model.recomputeSelectionSummary()
+            // Dev aid: RBXPORT_SELECT_ROW=<n> selects that row once, for screenshots.
+            if !autoSelected, let text = ProcessInfo.processInfo.environment["RBXPORT_SELECT_ROW"],
+                let n = Int(text), range.contains(n)
+            {
+                autoSelected = true
+                table.selectRowIndexes(IndexSet(integer: n), byExtendingSelection: false)
+            }
         }
+        private var autoSelected = false
 
         /// Selects the rows of `range` whose tracks are in the model's selection.
         private func restoreSelection(in range: Range<Int>) {
@@ -204,9 +228,14 @@ struct TrackTable: NSViewRepresentable {
                 let cell = reusable(tableView, column.identifier) { AttributeCellView() }
                 cell.show(analysed: data.map { $0.analysed != 0 } ?? false, cue: !(data?.hotCues.isEmpty ?? true))
                 return cell
-            case .preview, .artwork:
-                // Drawn by a later slice; an empty cell for now.
-                return reusable(tableView, column.identifier) { TextCellView() }
+            case .preview:
+                let cell = reusable(tableView, column.identifier) { PreviewCellView() }
+                cell.show(row: data, palette: palette, service: model.waveforms)
+                return cell
+            case .artwork:
+                let cell = reusable(tableView, column.identifier) { ArtworkCellView() }
+                cell.show(row: data, service: model.artwork)
+                return cell
             case .rating:
                 let cell = reusable(tableView, column.identifier) { TextCellView() }
                 cell.show(stars: data?.rating, alignment: .left)
@@ -224,6 +253,12 @@ struct TrackTable: NSViewRepresentable {
                 }
                 return cell
             }
+        }
+
+        /// A row scrolled out of view: its pending waveform and artwork loads are withdrawn.
+        func tableView(_ tableView: NSTableView, didRemove rowView: NSTableRowView, forRow row: Int) {
+            for case let cell as PreviewCellView in rowView.subviews { cell.cancelLoad() }
+            for case let cell as ArtworkCellView in rowView.subviews { cell.cancelLoad() }
         }
 
         private func reusable<Cell: NSTableCellView>(

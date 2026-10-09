@@ -36,6 +36,12 @@ struct ContentView: View {
                     .help("Show the track filter")
                 }
                 ToolbarItem(placement: .primaryAction) {
+                    Toggle(isOn: Binding(get: { model.infoPanelOpen }, set: { model.infoPanelOpen = $0 })) {
+                        Label("Information", systemImage: "info.circle")
+                    }
+                    .help("Show the track information panel")
+                }
+                ToolbarItem(placement: .primaryAction) {
                     SearchFieldView(
                         model: model, query: model.query, scope: model.searchField,
                         focusRequests: model.searchFocusRequests
@@ -70,7 +76,8 @@ struct DetailView: View {
             if let opened = model.opened {
                 TrackTable(
                     model: model, opened: opened, layout: model.layout, keyStyle: model.keyStyle,
-                    sortKey: model.sortKey, descending: model.descending)
+                    sortKey: model.sortKey, descending: model.descending,
+                    palette: model.waveformPalette, rowHeight: model.rowHeight)
             } else {
                 Spacer()
             }
@@ -78,7 +85,7 @@ struct DetailView: View {
             StatusLine()
         }
         .inspector(isPresented: $model.infoPanelOpen) {
-            InfoPanelPlaceholder()
+            InfoPanelView(model: model.info)
                 .inspectorColumnWidth(min: 220, ideal: 280, max: 420)
         }
         .overlay(alignment: .top) {
@@ -116,22 +123,5 @@ struct StatusLine: View {
         .font(.caption)
         .foregroundStyle(.secondary)
         .padding(.horizontal, 10).padding(.vertical, 5)
-    }
-}
-
-/// Stands in for the info panel until slice 2c: what "Show information" opens.
-struct InfoPanelPlaceholder: View {
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "info.circle").font(.largeTitle).foregroundStyle(.secondary)
-            Text("Track information").font(.headline)
-            Text(model.selectedIDs.count == 1 ? "Track \(model.selectedIDs.first ?? "")" : "\(model.selectedIDs.count) tracks selected")
-                .foregroundStyle(.secondary)
-            Text("The full panel arrives in a later slice.").font(.caption).foregroundStyle(.tertiary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .accessibilityIdentifier("info-panel")
     }
 }

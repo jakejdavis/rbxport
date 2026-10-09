@@ -8,13 +8,13 @@ use std::time::Instant;
 use rbl_app::dto::LibraryProblemDto;
 use rbl_app::error::run_command;
 use rbl_app::state::AppState;
-use rbl_app::{browse, explorer, startup, AppError, AppEvent, AppResult, EventSink};
+use rbl_app::{browse, details, explorer, media, startup, AppError, AppEvent, AppResult, EventSink};
 use rbl_db::{Library as Db, LibraryLocation, OpenMode};
 
 use crate::error::FfiError;
 use crate::events::{EventListener, ListenerSink};
 use crate::types::{
-    Device, ExplorerChildren, ExplorerRoot, ExtraColumn, FilterValues, LibraryProblem, PlaylistFileFormat, LibrarySummary, LoadOutcome, Row, TreeNode, ViewHandle, ViewSpec,
+    Device, ExplorerChildren, ExplorerRoot, ExtraColumn, FilterValues, LibraryProblem, PlaylistFileFormat, LibrarySummary, LoadOutcome, Row, TrackDetails, TrackLookups, TreeNode, ViewHandle, ViewSpec, WaveformKind,
 };
 
 /// Where `load_library` gets the library from.
@@ -183,5 +183,25 @@ impl Core {
     /// The audio file of a track (or a loose `file:` id), for Show in Finder.
     pub fn track_path(&self, track_id: String) -> Result<String, FfiError> {
         ffi("track_path", || browse::track_path(&self.state, &track_id))
+    }
+
+    /// One track in full. `NotFound` when the id is no longer in the library.
+    pub fn track_details(&self, track_id: String) -> Result<TrackDetails, FfiError> {
+        ffi("track_details", || details::track_details(&self.state, &track_id)).map(Into::into)
+    }
+
+    /// The lists the Info tab's dropdowns offer.
+    pub fn track_lookups(&self) -> Result<TrackLookups, FfiError> {
+        ffi("track_lookups", || details::track_lookups(&self.state)).map(Into::into)
+    }
+
+    /// A track's overview waveform for a palette; empty when it has no analysis.
+    pub fn waveform(&self, track_id: String, kind: WaveformKind) -> Result<Vec<u8>, FfiError> {
+        ffi("waveform", || media::track_waveform(&self.state, &track_id, kind.wire(), None, None))
+    }
+
+    /// A track's artwork image file, or `None` (no artwork, missing file, refused path, over 8 MiB).
+    pub fn artwork(&self, track_id: String) -> Option<Vec<u8>> {
+        media::artwork_bytes(&self.state, &track_id)
     }
 }

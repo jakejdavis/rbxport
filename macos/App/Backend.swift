@@ -24,6 +24,14 @@ protocol BackendProtocol: Sendable {
     func exportPlaylistFile(playlistID: String, path: String, format: PlaylistFileFormat) async throws -> UInt32
     /// The audio file of a track (or a loose `file:` id).
     func trackPath(id: String) async throws -> String
+    /// One track in full, for the info panel. Throws `NotFound` for a track that has gone.
+    func trackDetails(id: String) async throws -> TrackDetails
+    /// The lists the Info tab's pickers offer (keys, genres, My Tags).
+    func trackLookups() async throws -> TrackLookups
+    /// A track's overview waveform in a palette's layout; empty when it has no analysis.
+    func waveform(id: String, kind: WaveformKind) async throws -> Data
+    /// The artwork image file, or nil (none, missing, or refused by the core).
+    func artwork(id: String) async -> Data?
 }
 
 /// Forwards the Rust core's callbacks into an `AsyncStream`.
@@ -88,6 +96,12 @@ actor Backend: BackendProtocol {
         try core.exportPlaylistFile(playlistId: playlistID, path: path, format: format)
     }
     func trackPath(id: String) async throws -> String { try core.trackPath(trackId: id) }
+    func trackDetails(id: String) async throws -> TrackDetails { try core.trackDetails(trackId: id) }
+    func trackLookups() async throws -> TrackLookups { try core.trackLookups() }
+    func waveform(id: String, kind: WaveformKind) async throws -> Data {
+        try core.waveform(trackId: id, kind: kind)
+    }
+    func artwork(id: String) async -> Data? { core.artwork(trackId: id) }
 }
 
 func describe(_ error: Error) -> String {

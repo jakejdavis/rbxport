@@ -332,3 +332,85 @@ pub enum LoadOutcome {
     Ready,
     Problem,
 }
+
+/// Which of rekordbox's waveform palettes to read the preview tag for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Enum)]
+pub enum WaveformKind {
+    /// Three bytes a column (low, mid, high): `PWV6`.
+    Bands,
+    /// One byte a column (5 bits height, 3 whiteness): `PWAV`.
+    Mono,
+    /// Six bytes a column (height, two unread, r, g, b): `PWV4`.
+    Colour,
+}
+
+impl WaveformKind {
+    pub(crate) fn wire(self) -> &'static str {
+        match self {
+            Self::Bands => "bands",
+            Self::Mono => "mono",
+            Self::Colour => "colour",
+        }
+    }
+}
+
+/// One track in full, for the information panel.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct TrackDetails {
+    pub id: String,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub album_artist: String,
+    pub original_artist: String,
+    pub composer: String,
+    pub remixer: String,
+    pub lyricist: String,
+    pub genre: String,
+    pub label: String,
+    pub key: String,
+    pub comment: String,
+    pub mix_name: String,
+    pub message: String,
+    /// `"0"` or empty for none, `"1"` to `"8"` for rekordbox's eight colours.
+    pub color: String,
+    pub rating: u8,
+    pub bpm_x100: u32,
+    pub duration_sec: u32,
+    pub year: u32,
+    pub track_number: u32,
+    pub disc_number: u32,
+    pub play_count: u32,
+    pub file_type: u32,
+    pub file_size: u64,
+    pub bitrate: u32,
+    pub sample_rate: u32,
+    pub bit_depth: u32,
+    pub date_created: String,
+    pub release_date: String,
+    pub path: String,
+    pub hot_cue_auto_load: bool,
+    pub publish: bool,
+    pub has_artwork: bool,
+    pub my_tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct MyTag {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct MyTagCategory {
+    pub name: String,
+    pub tags: Vec<MyTag>,
+}
+
+/// What the Info tab's dropdowns offer.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct TrackLookups {
+    pub keys: Vec<String>,
+    pub genres: Vec<String>,
+    pub my_tag_categories: Vec<MyTagCategory>,
+}

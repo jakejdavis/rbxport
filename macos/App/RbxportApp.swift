@@ -40,12 +40,29 @@ struct RbxportApp: App {
                 ) {
                     ForEach(KeyStyle.allCases, id: \.self) { Text($0.label).tag($0) }
                 }
+                Picker(
+                    "Waveform Color",
+                    selection: Binding(get: { model.waveformPalette }, set: { model.waveformPalette = $0 })
+                ) {
+                    ForEach(WaveformPalette.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                Picker(
+                    "Row Size",
+                    selection: Binding(get: { model.rowSize }, set: { model.rowSize = $0 })
+                ) {
+                    ForEach(RowSize.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
                 Button("Reset Columns") { model.resetColumns() }
                 Toggle(
                     "Show Track Filter",
                     isOn: Binding(get: { model.filterBarOpen }, set: { model.filterBarOpen = $0 })
                 )
                 .keyboardShortcut("f", modifiers: [.command, .option])
+                Toggle(
+                    "Show Information",
+                    isOn: Binding(get: { model.infoPanelOpen }, set: { model.infoPanelOpen = $0 })
+                )
+                .keyboardShortcut("i", modifiers: .command)
                 Toggle(
                     "Show Playlist Counts",
                     isOn: Binding(get: { model.sidebar.showChildCounts }, set: { model.sidebar.showChildCounts = $0 }))
