@@ -6,7 +6,8 @@ import Testing
 struct RowPagerTests {
     private func opened(_ backend: MockBackend, query: String = "") async throws -> OpenedView {
         let handle = try await backend.openView(
-            ViewSpec(source: .collection, sort: .trackNo, descending: false, query: query, searchField: .all))
+            ViewSpec(source: .collection, sort: .trackNo, descending: false, query: query, searchField: .all,
+                filter: TrackFilter(bpm: nil, keys: nil, ratings: nil, colors: nil)))
         return OpenedView(handle: handle, generation: 1)
     }
 

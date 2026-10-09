@@ -41,7 +41,7 @@ pub enum TrackSource {
     Playlist { id: String },
     PlaylistFolder { id: String },
     History { id: String },
-    /// Not supported by this bridge yet; opening it is an error.
+    /// A directory on disk (the Explorer); an empty path lists nothing.
     Folder { path: String },
     TagList,
 }
@@ -113,6 +113,99 @@ pub struct ViewSpec {
     pub descending: bool,
     pub query: String,
     pub search_field: SearchField,
+    /// The filter bar's picks; the default filters nothing.
+    pub filter: TrackFilter,
+}
+
+/// BPM picks: whole-BPM values, a tolerance, and the master tempo to follow.
+#[derive(Debug, Clone, Default, PartialEq, Eq, uniffi::Record)]
+pub struct BpmFilter {
+    /// Whole BPMs (rounded) the bar has picked.
+    pub values: Vec<u32>,
+    /// 0 to 6; clamped by the core.
+    pub tolerance_pct: u8,
+    /// Master BPM x100 to match around instead of `values` (Phase 3).
+    pub master_bpm_x100: Option<u32>,
+}
+
+/// One entry per filter-bar column; `None` is an unticked column. Keys and
+/// colours travel as the names the bar shows.
+#[derive(Debug, Clone, Default, PartialEq, Eq, uniffi::Record)]
+pub struct TrackFilter {
+    pub bpm: Option<BpmFilter>,
+    pub keys: Option<Vec<String>>,
+    pub ratings: Option<Vec<u8>>,
+    pub colors: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct CountedBpm {
+    pub value: u32,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct CountedKey {
+    pub value: String,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct TagCategory {
+    pub name: String,
+    pub tags: Vec<String>,
+}
+
+/// What the filter bar offers for a source and query.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct FilterValues {
+    pub bpms: Vec<CountedBpm>,
+    pub keys: Vec<CountedKey>,
+    pub tags: Vec<TagCategory>,
+}
+
+/// One of the folders the Explorer starts from.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ExplorerRoot {
+    pub name: String,
+    pub path: String,
+}
+
+/// The folders directly under one folder.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ExplorerChildren {
+    /// The first of them by name, up to the core's cap.
+    pub names: Vec<String>,
+    /// How many there were; more than `names` holds when the cap cut it.
+    pub total: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct DeviceExport {
+    pub tracks: u32,
+    pub playlists: u32,
+    pub ours: bool,
+    pub written: String,
+}
+
+/// A mounted volume an export could be written to.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct Device {
+    pub name: String,
+    pub path: String,
+    pub total_bytes: u64,
+    pub free_bytes: u64,
+    pub file_system: String,
+    pub removable: bool,
+    pub volume_id: String,
+    pub export: Option<DeviceExport>,
+}
+
+/// The file formats a playlist can be exported as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum PlaylistFileFormat {
+    M3u8,
+    Txt,
 }
 
 /// The columns `fetch_rows` fills in only when asked: each costs a database

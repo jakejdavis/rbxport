@@ -29,6 +29,12 @@ struct ContentView: View {
                 DetailView()
             }
             .toolbar {
+                ToolbarItem(placement: .navigation) {
+                    Toggle(isOn: Binding(get: { model.filterBarOpen }, set: { model.filterBarOpen = $0 })) {
+                        Label("Filter", systemImage: "line.3.horizontal.decrease.circle")
+                    }
+                    .help("Show the track filter")
+                }
                 ToolbarItem(placement: .primaryAction) {
                     SearchFieldView(
                         model: model, query: model.query, scope: model.searchField,
@@ -45,11 +51,9 @@ struct SidebarView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        @Bindable var model = model
-        List(model.tree, children: \.children, selection: $model.selection) { item in
-            Label(item.node.name, systemImage: item.symbol)
-                .badge(item.node.childCount.map { Int($0) } ?? 0)
-        }
+        SidebarOutline(
+            model: model, version: model.sidebar.version, selectedID: model.selectedNodeID,
+            showCounts: model.sidebar.showChildCounts)
     }
 }
 
@@ -57,7 +61,12 @@ struct DetailView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
+        @Bindable var model = model
         VStack(spacing: 0) {
+            if model.filterBarOpen {
+                FilterBar(model: model)
+                Divider()
+            }
             if let opened = model.opened {
                 TrackTable(
                     model: model, opened: opened, layout: model.layout, keyStyle: model.keyStyle,
@@ -67,6 +76,10 @@ struct DetailView: View {
             }
             Divider()
             StatusLine()
+        }
+        .inspector(isPresented: $model.infoPanelOpen) {
+            InfoPanelPlaceholder()
+                .inspectorColumnWidth(min: 220, ideal: 280, max: 420)
         }
         .overlay(alignment: .top) {
             if let error = model.viewError {
@@ -88,6 +101,11 @@ struct StatusLine: View {
                 Text("Loaded in \(s.loadMs) ms")
             }
             Spacer()
+            if let notice = model.notice {
+                Text(notice).foregroundStyle(.primary)
+                Button("Dismiss", systemImage: "xmark.circle.fill") { model.dismissNotice() }
+                    .labelStyle(.iconOnly).buttonStyle(.plain)
+            }
             if let summary = model.selectionSummary {
                 Text(summary.text)
             }
@@ -98,5 +116,22 @@ struct StatusLine: View {
         .font(.caption)
         .foregroundStyle(.secondary)
         .padding(.horizontal, 10).padding(.vertical, 5)
+    }
+}
+
+/// Stands in for the info panel until slice 2c: what "Show information" opens.
+struct InfoPanelPlaceholder: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "info.circle").font(.largeTitle).foregroundStyle(.secondary)
+            Text("Track information").font(.headline)
+            Text(model.selectedIDs.count == 1 ? "Track \(model.selectedIDs.first ?? "")" : "\(model.selectedIDs.count) tracks selected")
+                .foregroundStyle(.secondary)
+            Text("The full panel arrives in a later slice.").font(.caption).foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityIdentifier("info-panel")
     }
 }

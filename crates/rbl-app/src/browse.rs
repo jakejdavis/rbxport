@@ -3,7 +3,7 @@
 
 use rbl_index::Library;
 
-use crate::dto::{LibrarySummaryDto, RowDto, TrackSourceDto, TreeNodeDto, ViewHandleDto, ViewSpecDto};
+use crate::dto::{CountedDto, DeviceDto, DeviceExportDto, FilterValuesDto, TagCategoryDto, LibrarySummaryDto, RowDto, TrackSourceDto, TreeNodeDto, ViewHandleDto, ViewSpecDto};
 use crate::edits::write_error;
 use crate::error::{AppError, AppResult, ErrorKind};
 use crate::state::{rows_to_dto, spec_from_wire, AppState};
@@ -38,16 +38,93 @@ pub fn playlist_tree(state: &AppState) -> AppResult<Vec<TreeNodeDto>> {
     Ok(build_tree(&library))
 }
 
-/// Opens a view over the index. A `Folder` source is read from disk, not from
-/// the index, and is the shell's to open.
+/// Opens a view: over the index, or, for a `Folder` source, over a directory
+/// read from disk and matched against the library.
 pub fn open_view(state: &AppState, spec: &ViewSpecDto) -> AppResult<ViewHandleDto> {
-    if matches!(spec.source, TrackSourceDto::Folder { .. }) {
-        return Err(AppError::new(ErrorKind::Malformed, "A folder view is not opened from the index."));
+    if let TrackSourceDto::Folder { path } = &spec.source {
+        return crate::explorer::open_folder(state, path, spec);
     }
     let library = state.library()?;
     let parsed = spec_from_wire(&library, spec);
     let (view_id, len, generation) = state.open_view_scoped(&parsed, spec.search_field)?;
     Ok(ViewHandleDto { view_id, len, gen: generation })
+}
+
+/// The BPMs and keys the track filter bar can offer for a list.
+///
+/// Counted over the source and query alone, never over the filter's own
+/// result, or a picked value would hide the others.
+pub fn filter_values(state: &AppState, spec: &ViewSpecDto) -> AppResult<FilterValuesDto> {
+    let library = state.library()?;
+    let parsed = spec_from_wire(&library, spec);
+    let values = library.filter_values_scoped(&parsed, spec.search_field);
+    Ok(FilterValuesDto {
+        bpms: values.bpms.into_iter().map(|c| CountedDto { value: c.value, count: c.count }).collect(),
+        keys: values.keys.into_iter().map(|c| CountedDto { value: c.value, count: c.count }).collect(),
+        tags: values.tags.into_iter().map(|c| TagCategoryDto { name: c.name, tags: c.tags }).collect(),
+    })
+}
+
+/// Lists the volumes an export could be written to, and what is on each.
+/// Reading a stick to see what it holds is not cheap, so call this when the
+/// list is shown, not on a timer.
+pub fn list_devices() -> Vec<DeviceDto> {
+    rbl_devices::list()
+        .into_iter()
+        .map(|device| {
+            let found = rbl_devices::inspect(&device.mount_point);
+            DeviceDto {
+                name: device.name,
+                path: device.mount_point.to_string_lossy().into_owned(),
+                total_bytes: device.total_bytes,
+                free_bytes: device.free_bytes,
+                file_system: device.file_system,
+                removable: device.removable,
+                volume_id: device.volume_id,
+                export: found.map(|export| DeviceExportDto {
+                    tracks: u32::try_from(export.tracks).unwrap_or(u32::MAX),
+                    playlists: u32::try_from(export.playlists).unwrap_or(u32::MAX),
+                    ours: export.ours,
+                    written: export.written,
+                }),
+            }
+        })
+        .collect()
+}
+
+/// Where a track's audio file is, for revealing it in the Finder.
+pub fn track_path(state: &AppState, track: &str) -> AppResult<String> {
+    let library = state.library()?;
+    library
+        .audio_path_of(track)
+        .map(str::to_owned)
+        .ok_or_else(|| AppError::new(ErrorKind::NotFound, "That track has no file."))
+}
+
+/// Writes a playlist to `path` as `m3u8` or (anything else is m3u8) the
+/// tab-separated `txt`. An intelligent playlist is what its rule admits now.
+/// Returns how many tracks were written.
+pub fn export_playlist_file(state: &AppState, playlist: &str, path: &str, format: &str) -> AppResult<u32> {
+    let library = state.library()?;
+    let playlists = library.playlists();
+    let Some(index) = playlist.parse::<u64>().ok().and_then(|numeric| playlists.index_of(numeric)) else {
+        return Err(AppError::new(ErrorKind::NotFound, "That playlist is not in the library."));
+    };
+    let source = if playlists.is_smart(index) {
+        rbl_index::TrackSource::SmartPlaylist(index)
+    } else {
+        rbl_index::TrackSource::Playlist(index)
+    };
+    let rows = library.source_rows_unlocked(&playlists, &source);
+    drop(playlists);
+    let text = match format {
+        "txt" => playlist_txt(&library, &rows),
+        _ => playlist_m3u8(&library, &rows),
+    };
+    std::fs::write(path, text).map_err(|e| {
+        AppError::new(ErrorKind::Internal, "The playlist file could not be written.").with_detail(e.to_string())
+    })?;
+    Ok(u32::try_from(rows.len()).unwrap_or(u32::MAX))
 }
 
 /// One page of an index view's rows. Folder views are the shell's.
@@ -60,6 +137,11 @@ pub fn fetch_rows(
 ) -> AppResult<Vec<RowDto>> {
     check_page(len)?;
     let library = state.library()?;
+    if let Some(folder) = state.folder_view(view_id) {
+        let mut rows = crate::explorer::fetch_rows(&library, &folder, offset, len);
+        if !extra_columns.is_empty() { enrich_rows(state, &mut rows, extra_columns)?; }
+        return Ok(rows);
+    }
     let view = state.view(view_id)?;
     let offset = offset as usize;
     let window = view.window(offset, len as usize);
@@ -84,6 +166,9 @@ pub fn check_page(len: u32) -> AppResult<()> {
 
 pub fn view_ids_in_range(state: &AppState, view_id: u32, from: u32, to: u32) -> AppResult<Vec<String>> {
     let library = state.library()?;
+    if let Some(folder) = state.folder_view(view_id) {
+        return Ok(crate::explorer::ids_in_range(&library, &folder, from, to));
+    }
     let view = state.view(view_id)?;
     Ok(library
         .ids_in_range(&view, from as usize, to as usize)
@@ -311,4 +396,46 @@ pub fn enrich_rows(state: &AppState, rows: &mut [RowDto], columns: &[String]) ->
         }
         Ok(())
     }).map_err(write_error)
+}
+
+/// An extended M3U: a line of length and title, then the file, per track.
+fn playlist_m3u8(library: &rbl_index::Library, rows: &[u32]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::from("#EXTM3U\n");
+    for &row in rows {
+        let i = row as usize;
+        let artist = library.artist_name(row);
+        let title = library.title.get(i);
+        let name = if artist.is_empty() { title.to_owned() } else { format!("{artist} - {title}") };
+        let _ = writeln!(out, "#EXTINF:{},{name}\n{}", library.length_sec.get(i).copied().unwrap_or(0), library.folder_path.get(i));
+    }
+    out
+}
+
+/// rekordbox's tab-separated listing: a header, then one line per track in
+/// the playlist's order, times as `m:ss`.
+fn playlist_txt(library: &rbl_index::Library, rows: &[u32]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::from("#\tTrack Title\tArtist\tAlbum\tGenre\tBPM\tRating\tTime\tKey\tDate Added\n");
+    let clean = |text: &str| text.replace(['\t', '\n', '\r'], " ");
+    for (n, &row) in rows.iter().enumerate() {
+        let i = row as usize;
+        let secs = library.length_sec.get(i).copied().unwrap_or(0);
+        let bpm = f64::from(library.bpm_x100.get(i).copied().unwrap_or(0)) / 100.0;
+        let _ = writeln!(
+            out,
+            "{}\t{}\t{}\t{}\t{}\t{bpm:.2}\t{}\t{}:{:02}\t{}\t{}",
+            n + 1,
+            clean(library.title.get(i)),
+            clean(library.artist_name(row)),
+            clean(library.album_name(row)),
+            clean(library.genre_name(row)),
+            library.rating.get(i).copied().unwrap_or(0),
+            secs / 60,
+            secs % 60,
+            clean(library.key_name(row)),
+            clean(library.date_added.get(i)),
+        );
+    }
+    out
 }

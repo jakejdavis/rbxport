@@ -106,7 +106,7 @@ struct SelectionTests {
         let model = await ready()
         await load(model, rowAt: 0)
         model.tableSelectionChanged(IndexSet(0..<3), keepingUnloaded: false)
-        model.selection = model.tree[1].children![0].id
+        model.selectedNodeID = "pl:10"
         #expect(model.selectedIDs.isEmpty)
         #expect(await eventually { model.opened?.generation == 2 })
     }

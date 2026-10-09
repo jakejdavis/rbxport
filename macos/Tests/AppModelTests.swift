@@ -6,19 +6,19 @@ import Testing
 struct AppModelTests {
     @Test func loadsSummaryTreeAndFirstView() async {
         let backend = MockBackend(trackCount: 300)
-        let model = AppModel(backend: backend)
+        let model = AppModel(backend: backend, layoutStore: isolatedStore())
         model.start()
         #expect(await eventually { model.opened != nil })
         #expect(model.phase == .ready)
         #expect(model.summary?.trackCount == 300)
-        #expect(model.tree.count == 2)  // All Tracks, and Playlists with its two children
-        #expect(model.tree[1].children?.count == 2)
-        #expect(model.selection == 0)
+        let playlists = model.sidebar.section(.playlists).children
+        #expect(playlists.map(\.id) == ["all", "pl:10", "pl:11"])
+        #expect(model.selectedNodeID == "all")
         #expect(model.opened?.handle.len == 300)
     }
 
     @Test func aFailedLoadShowsTheProblem() async {
-        let model = AppModel(backend: MockBackend(failLoad: "database is locked"))
+        let model = AppModel(backend: MockBackend(failLoad: "database is locked"), layoutStore: isolatedStore())
         model.start()
         #expect(await eventually { model.phase != .loading })
         #expect(model.phase == .failed("database is locked"))
@@ -27,11 +27,10 @@ struct AppModelTests {
 
     @Test func selectingAPlaylistOpensItsSource() async {
         let backend = MockBackend()
-        let model = AppModel(backend: backend)
+        let model = AppModel(backend: backend, layoutStore: isolatedStore())
         model.start()
         #expect(await eventually { model.opened != nil })
-        let playlist = model.tree[1].children![0]
-        model.selection = playlist.id
+        model.selectedNodeID = "pl:10"
         #expect(await eventually { model.opened?.generation == 2 })
         let specs = await backend.openedSpecs
         #expect(specs.last?.source == .playlist(id: "10"))
@@ -39,7 +38,7 @@ struct AppModelTests {
 
     @Test func sortingReopensTheView() async {
         let backend = MockBackend()
-        let model = AppModel(backend: backend)
+        let model = AppModel(backend: backend, layoutStore: isolatedStore())
         model.start()
         #expect(await eventually { model.opened != nil })
         model.sort(by: .title, descending: true)
@@ -51,7 +50,7 @@ struct AppModelTests {
 
     @Test func searchingReopensWithTheQuery() async {
         let backend = MockBackend(trackCount: 300)
-        let model = AppModel(backend: backend)
+        let model = AppModel(backend: backend, layoutStore: isolatedStore())
         model.start()
         #expect(await eventually { model.opened != nil })
         model.query = "Track 29"
@@ -60,24 +59,23 @@ struct AppModelTests {
 
     @Test func libraryChangedReloadsTreeSummaryAndView() async {
         let backend = MockBackend(trackCount: 300)
-        let model = AppModel(backend: backend)
+        let model = AppModel(backend: backend, layoutStore: isolatedStore())
         model.start()
         #expect(await eventually { model.opened != nil })
         // Select "Peak", then have the library change underneath: a new first node shifts positions.
-        let peak = model.tree[1].children![1]
-        model.selection = peak.id
+        model.selectedNodeID = "pl:11"
         #expect(await eventually { model.opened?.generation == 2 })
 
         var changed = MockBackend.sampleTree
         changed.insert(
-            TreeNode(id: "new", name: "New", kind: .playlist, depth: 0, expanded: nil, childCount: 1), at: 0)
+            TreeNode(id: "new", name: "New", kind: .playlist, depth: 1, expanded: nil, childCount: 1), at: 2)
         await backend.changeLibrary(trackCount: 50, nodes: changed)
 
         #expect(await eventually { model.summary?.trackCount == 50 })
         #expect(await eventually { model.opened?.handle.len == 50 && model.opened?.generation == 3 })
         // The selection followed the node ("Peak"), not the position.
-        let selected = model.tree.flatMap { [$0] + ($0.children ?? []) }.first { $0.id == model.selection }
-        #expect(selected?.node.id == "11")
+        #expect(model.selectedNodeID == "pl:11")
+        #expect(model.sidebar.section(.playlists).children.map(\.id) == ["all", "pl:new", "pl:10", "pl:11"])
         #expect(await backend.treeCalls == 2)
     }
 }

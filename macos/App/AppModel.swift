@@ -1,62 +1,6 @@
 import Foundation
+import AppKit
 import Observation
-
-/// One sidebar row, rebuilt from the flat depth-ordered list.
-struct TreeItem: Identifiable, Hashable, Sendable {
-    let id: Int  // position in the flat list: ids from different tables may collide
-    let node: TreeNode
-    var children: [TreeItem]?
-
-    static func == (a: TreeItem, b: TreeItem) -> Bool { a.id == b.id }
-    func hash(into hasher: inout Hasher) { hasher.combine(id) }
-
-    var symbol: String {
-        switch node.kind {
-        case .allTracks: "music.note.list"
-        case .collection: "square.stack"
-        case .histories: "clock"
-        case .folder: "folder"
-        case .playlist: "music.note"
-        case .smartPlaylist: "gearshape"
-        case .historyFolder: "calendar"
-        case .history: "clock.arrow.circlepath"
-        }
-    }
-
-    /// The track source this node opens, or nil for a heading.
-    var source: TrackSource? {
-        switch node.kind {
-        case .allTracks, .collection: .collection
-        case .histories: nil
-        case .folder: .playlistFolder(id: node.id)
-        case .playlist, .smartPlaylist: .playlist(id: node.id)
-        case .historyFolder, .history: .history(id: node.id)
-        }
-    }
-
-    static func hierarchy(from flat: [TreeNode]) -> [TreeItem] {
-        // Build bottom-up with a stack of (depth, index) so children nest.
-        struct Pending { var item: TreeItem; var depth: UInt32 }
-        var roots: [TreeItem] = []
-        var stack: [Pending] = []
-        func close(downTo depth: UInt32) {
-            while let top = stack.last, top.depth >= depth {
-                stack.removeLast()
-                if let parent = stack.last {
-                    stack[stack.count - 1].item.children = (parent.item.children ?? []) + [top.item]
-                } else {
-                    roots.append(top.item)
-                }
-            }
-        }
-        for (index, node) in flat.enumerated() {
-            close(downTo: node.depth)
-            stack.append(Pending(item: TreeItem(id: index, node: node, children: nil), depth: node.depth))
-        }
-        close(downTo: 0)
-        return roots
-    }
-}
 
 /// What the status bar says about a multi-row selection.
 struct SelectionSummary: Equatable, Sendable {
@@ -102,18 +46,54 @@ final class AppModel {
 
     private(set) var phase: Phase = .loading
     private(set) var summary: LibrarySummary?
-    private(set) var tree: [TreeItem] = []
+    let sidebar: SidebarModel
     private(set) var opened: OpenedView?
     private(set) var viewError: String?
+    /// A transient message for the status line (an export finished, a reveal failed).
+    private(set) var notice: String?
 
-    var selection: Int? {
+    /// The selected source-list node, by id (`all`, `pl:10`, `hi:3`, `ex:/path`, `tag`).
+    /// Persisted across launches.
+    var selectedNodeID: String? {
         didSet {
-            guard selection != oldValue else { return }
+            guard selectedNodeID != oldValue else { return }
+            if let id = selectedNodeID { layoutStore.defaults.set(id, forKey: SidebarModel.Keys.selected) }
             // A different source starts with nothing selected; the same one (after a reload) keeps its tracks.
-            if item(withID: selection)?.node.id != currentNodeID { clearTrackSelection() }
+            if selectedNodeID != currentNodeID { clearTrackSelection() }
             reopen()
         }
     }
+
+    // MARK: Filter bar
+
+    /// The bar is shown. Only this is persisted; the picks apply while the bar is open.
+    var filterBarOpen: Bool {
+        didSet {
+            guard filterBarOpen != oldValue else { return }
+            layoutStore.defaults.set(filterBarOpen, forKey: "filterBar.open")
+            if filterState.isNarrowing { reopen() } else { refreshFilterValues() }
+        }
+    }
+    var filterState = FilterState() {
+        didSet { if filterState != oldValue && filterBarOpen && (filterState.wire() != oldValue.wire()) { reopen() } }
+    }
+    /// What the bar's lists offer for the current source and query.
+    private(set) var filterValues: FilterValues?
+    private var filterValuesKey: FilterValuesKey?
+    private var filterToken = 0
+    private var libraryEpoch = 0
+
+    private struct FilterValuesKey: Equatable {
+        let source: TrackSource
+        let query: String
+        let field: SearchField
+        let epoch: Int
+    }
+
+    /// Whether the info panel is shown (Show information). Slice 2c builds the panel itself.
+    var infoPanelOpen = false
+    /// Reveals files in the Finder; replaced in tests.
+    var reveal: ([URL]) -> Void = { NSWorkspace.shared.activateFileViewerSelecting($0) }
     var query = "" {
         didSet { if query != oldValue { scheduleSearch() } }
     }
@@ -157,6 +137,9 @@ final class AppModel {
     init(backend: any BackendProtocol, layoutStore: ColumnLayoutStore = ColumnLayoutStore()) {
         self.backend = backend
         self.layoutStore = layoutStore
+        sidebar = SidebarModel(backend: backend, defaults: layoutStore.defaults)
+        selectedNodeID = layoutStore.defaults.string(forKey: SidebarModel.Keys.selected)
+        filterBarOpen = layoutStore.defaults.bool(forKey: "filterBar.open")
         pager = RowPager(backend: backend)
         layout = layoutStore.load(.collection)
         keyStyle = layoutStore.defaults.string(forKey: "keyStyle").flatMap(KeyStyle.init) ?? .classic
@@ -207,17 +190,20 @@ final class AppModel {
             async let loadedSummary = backend.summary()
             async let loadedTree = backend.playlistTree()
             let (newSummary, flat) = try await (loadedSummary, loadedTree)
-            let keptNodeID = item(withID: selection)?.node.id
             summary = newSummary
-            tree = TreeItem.hierarchy(from: flat)
+            libraryEpoch += 1
+            sidebar.setLibraryTree(flat)
+            let firstLoad = phase != .ready
             phase = .ready
-            let kept = keptNodeID.flatMap { id in flat.firstIndex { $0.id == id } }
-            let newSelection = kept ?? (selectFirst || selection != nil ? 0 : nil)
-            if newSelection == selection {
-                reopen()
-            } else {
-                selection = newSelection  // reopens
+            // Back to the node that was selected (restored from the last launch on the first
+            // load); one that no longer exists falls back to All Tracks.
+            let wanted = selectedNodeID.flatMap { sidebar.canSelect($0) ? $0 : nil } ?? "all"
+            if wanted == selectedNodeID { reopen() } else { selectedNodeID = wanted }
+            if firstLoad {
+                if let roots = try? await backend.explorerRoots() { sidebar.setExplorerRoots(roots) }
+                Task { await sidebar.restoreExplorer() }
             }
+            Task { await sidebar.refreshDevices() }
         } catch {
             phase = .failed(describe(error))
         }
@@ -402,21 +388,10 @@ final class AppModel {
         }
     }
 
-    private func item(withID id: Int?) -> TreeItem? {
-        func find(_ items: [TreeItem]) -> TreeItem? {
-            for item in items {
-                if item.id == id { return item }
-                if let hit = find(item.children ?? []) { return hit }
-            }
-            return nil
-        }
-        return find(tree)
-    }
-
     /// Reopens the selected node as a view with the current sort and query.
     func reopen() {
-        guard let node = item(withID: selection), let source = node.source else { return }
-        currentNodeID = node.node.id
+        guard let nodeID = selectedNodeID, let source = SidebarNode.source(forID: nodeID) else { return }
+        currentNodeID = nodeID
         let newContext = ColumnContext(source)
         if newContext != context {
             context = newContext
@@ -426,7 +401,9 @@ final class AppModel {
         let mine = generation
         let extra = extraColumns
         let spec = ViewSpec(
-            source: source, sort: sortKey, descending: descending, query: query, searchField: searchField)
+            source: source, sort: sortKey, descending: descending, query: query, searchField: searchField,
+            filter: filterBarOpen ? filterState.wire() : TrackFilter(bpm: nil, keys: nil, ratings: nil, colors: nil))
+        refreshFilterValues()
         let backend = backend
         Task {
             do {
@@ -443,4 +420,93 @@ final class AppModel {
             }
         }
     }
+
+    // MARK: Filter values
+
+    /// Re-fetches the bar's lists when the source, query, scope or library changed since the last fetch.
+    /// The spec carries no filter, so a picked value never hides the others.
+    func refreshFilterValues() {
+        guard filterBarOpen, let nodeID = selectedNodeID, let source = SidebarNode.source(forID: nodeID) else { return }
+        let key = FilterValuesKey(source: source, query: query, field: searchField, epoch: libraryEpoch)
+        guard key != filterValuesKey else { return }
+        filterValuesKey = key
+        filterToken += 1
+        let token = filterToken
+        // The filter does not apply to a folder on disk.
+        if case .folder = source {
+            filterValues = nil
+            return
+        }
+        let spec = ViewSpec(
+            source: source, sort: .trackNo, descending: false, query: query, searchField: searchField,
+            filter: TrackFilter(bpm: nil, keys: nil, ratings: nil, colors: nil))
+        let backend = backend
+        Task {
+            let values = try? await backend.filterValues(spec)
+            guard token == filterToken else { return }
+            filterValues = values
+        }
+    }
+
+    func resetFilter() { filterState.reset() }
+
+    // MARK: Sidebar selection
+
+    /// A click in the source list.
+    func selectNode(_ id: String) {
+        selectedNodeID = id
+    }
+
+    // MARK: Context-menu commands
+
+    /// What the track menu needs to know about the current selection and source.
+    func trackMenuContext() -> ContextMenus.TrackContext {
+        ContextMenus.TrackContext(
+            selectionCount: selectedIDs.count, inTagList: selectedNodeID == "tag",
+            inExplorer: selectedNodeID?.hasPrefix("ex:") ?? false)
+    }
+
+    /// Runs a live entry of the track menu on the selection.
+    func runTrackMenu(_ command: MenuCommand) {
+        switch command {
+        case .showInFinder:
+            let ids = Array(selectedIDs)
+            Task { await revealInFinder(trackIDs: ids) }
+        case .showInformation: showInformation()
+        case .exportPlaylist: break
+        }
+    }
+
+    /// Show in Finder: reveals the audio files of these tracks.
+    func revealInFinder(trackIDs: [String]) async {
+        var urls: [URL] = []
+        for id in trackIDs.prefix(200) {
+            if let path = try? await backend.trackPath(id: id) { urls.append(URL(fileURLWithPath: path)) }
+        }
+        guard !urls.isEmpty else {
+            notice = "No file to show."
+            return
+        }
+        reveal(urls)
+    }
+
+    /// Show information: opens the info panel on the selection.
+    func showInformation() { infoPanelOpen = true }
+
+    /// Exports the playlist behind a source-list node to `url`.
+    @discardableResult
+    func exportPlaylist(nodeID: String, to url: URL, format: PlaylistFileFormat) async -> UInt32? {
+        guard nodeID.hasPrefix("pl:") else { return nil }
+        do {
+            let count = try await backend.exportPlaylistFile(
+                playlistID: String(nodeID.dropFirst(3)), path: url.path, format: format)
+            notice = "Exported \(count) track\(count == 1 ? "" : "s") to \(url.lastPathComponent)."
+            return count
+        } catch {
+            notice = "Export failed: \(describe(error))"
+            return nil
+        }
+    }
+
+    func dismissNotice() { notice = nil }
 }

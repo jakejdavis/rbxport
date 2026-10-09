@@ -48,12 +48,12 @@ struct TableModelTests {
         model.toggleColumn(.genre)
         #expect(store.load(.collection).order.contains(.genre))
 
-        model.selection = model.tree[1].children![0].id  // a playlist: its own layout
+        model.selectedNodeID = "pl:10"  // a playlist: its own layout
         #expect(await eventually { model.opened?.generation == 2 })
         #expect(model.context == .playlist)
         #expect(!model.layout.order.contains(.genre))
 
-        model.selection = 0
+        model.selectedNodeID = "all"
         #expect(await eventually { model.context == .collection })
         #expect(model.layout.order.contains(.genre))
     }

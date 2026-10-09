@@ -14,15 +14,15 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::link::LinkStatusDto;
 use crate::dto::{
-    cue_colour_css, AudioDeviceDto, AudioDevicesDto, CueDto, DeviceDto, DeviceExportDto, ExportReportDto,
+    cue_colour_css, AudioDeviceDto, AudioDevicesDto, CueDto, DeviceDto, ExportReportDto,
     EditHistoryDto, ImportReportDto, LibrarySummaryDto, LimiterDto, MissingTrackDto, MissingTracksDto, PhraseDto, RowDto,
     TreeNodeDto, ViewHandleDto, ViewSpecDto,
-    BackupDto, CountedDto, DeviceSyncStateDto, DuplicateGroupDto, DuplicateTrackDto, DuplicatesDto,
-    ExportProgressDto, FilterValuesDto, ItunesLibraryDto, MissingExportFileDto, SmartConditionDto, SmartRuleDto, SyncDeviceReportDto, SyncPlaylistDto, SyncProgressDto, TagCategoryDto,
+    BackupDto, DeviceSyncStateDto, DuplicateGroupDto, DuplicateTrackDto, DuplicatesDto,
+    ExportProgressDto, FilterValuesDto, ItunesLibraryDto, MissingExportFileDto, SmartConditionDto, SmartRuleDto, SyncDeviceReportDto, SyncPlaylistDto, SyncProgressDto,
     XmlImportReportDto,
 };
 use crate::error::{AppError, AppResult, ErrorKind};
-use crate::state::{spec_from_wire, AppState, LibraryEdit};
+use crate::state::{AppState, LibraryEdit};
 
 pub use rbl_app::browse::MAX_ROWS;
 pub(crate) use rbl_app::edits::{apply_history, history_dto, refresh_after_edit, touched_by, write_error, Touched};
@@ -86,14 +86,8 @@ pub async fn playlist_tree(state: State<'_, Arc<AppState>>) -> AppResult<Vec<Tre
 
 #[tauri::command]
 pub async fn open_view(state: State<'_, Arc<AppState>>, spec: ViewSpecDto) -> AppResult<ViewHandleDto> {
-    // A folder is read from disk, not from the index, so it takes its own
-    // path before the source is translated.
-    if let crate::dto::TrackSourceDto::Folder { path } = &spec.source {
-        state.library()?;
-        return crate::explorer::open_folder(&state, path.clone(), &spec).await;
-    }
-    // Sorting and filtering happen here, so this is the one that must not run
-    // on the async thread.
+    // Sorting and filtering (and a folder's directory read) happen here, so
+    // this is the one that must not run on the async thread.
     let state = Arc::clone(&state);
     blocking("open_view", move || rbl_app::browse::open_view(&state, &spec)).await
 }
@@ -108,21 +102,7 @@ pub async fn fetch_rows(
 ) -> AppResult<Vec<RowDto>> {
     let extra_columns = extra_columns.unwrap_or_default();
     let handle = Arc::clone(&state);
-    if let Some(folder) = state.folder_view(view_id) {
-        rbl_app::browse::check_page(len)?;
-        let library = state.library()?;
-        let mut rows = crate::explorer::fetch_rows(library, folder, offset, len).await?;
-        if extra_columns.is_empty() {
-            Ok(rows)
-        } else {
-            blocking("fetch_row_details", move || {
-                rbl_app::browse::enrich_rows(&handle, &mut rows, &extra_columns)?;
-                Ok(rows)
-            }).await
-        }
-    } else {
-        blocking("fetch_rows", move || rbl_app::browse::fetch_rows(&handle, view_id, offset, len, &extra_columns)).await
-    }
+    blocking("fetch_rows", move || rbl_app::browse::fetch_rows(&handle, view_id, offset, len, &extra_columns)).await
 }
 
 #[tauri::command]
@@ -132,9 +112,6 @@ pub async fn view_ids_in_range(
     from: u32,
     to: u32,
 ) -> AppResult<Vec<String>> {
-    if let Some(folder) = state.folder_view(view_id) {
-        return crate::explorer::ids_in_range(state.library()?, folder, from, to).await;
-    }
     let state = Arc::clone(&state);
     blocking("view_ids_in_range", move || rbl_app::browse::view_ids_in_range(&state, view_id, from, to)).await
 }
@@ -1300,30 +1277,7 @@ fn write_export_with_phase(
 /// behind this — the panel asks when it is opened.
 #[tauri::command]
 pub async fn list_devices() -> AppResult<Vec<DeviceDto>> {
-    blocking("list_devices", || {
-        Ok(rbl_devices::list()
-            .into_iter()
-            .map(|device| {
-                let found = rbl_devices::inspect(&device.mount_point);
-                DeviceDto {
-                    name: device.name,
-                    path: device.mount_point.to_string_lossy().into_owned(),
-                    total_bytes: device.total_bytes,
-                    free_bytes: device.free_bytes,
-                    file_system: device.file_system,
-                    removable: device.removable,
-                    volume_id: device.volume_id,
-                    export: found.map(|export| DeviceExportDto {
-                        tracks: u32::try_from(export.tracks).unwrap_or(u32::MAX),
-                        playlists: u32::try_from(export.playlists).unwrap_or(u32::MAX),
-                        ours: export.ours,
-                        written: export.written,
-                    }),
-                }
-            })
-            .collect())
-    })
-    .await
+    blocking("list_devices", || Ok(rbl_app::browse::list_devices())).await
 }
 
 /// Where a track's audio is read from.
@@ -2864,71 +2818,11 @@ pub async fn export_playlist_file(
     path: String,
     format: String,
 ) -> AppResult<u32> {
-    let library = state.library()?;
+    let state = Arc::clone(&state);
     blocking("export_playlist_file", move || {
-        let playlists = library.playlists();
-        let Some(index) = playlist.parse::<u64>().ok().and_then(|numeric| playlists.index_of(numeric)) else {
-            return Err(AppError::new(ErrorKind::NotFound, "That playlist is not in the library."));
-        };
-        let source = if playlists.is_smart(index) {
-            rbl_index::TrackSource::SmartPlaylist(index)
-        } else {
-            rbl_index::TrackSource::Playlist(index)
-        };
-        let rows = library.source_rows_unlocked(&playlists, &source);
-        drop(playlists);
-        let text = match format.as_str() {
-            "txt" => playlist_txt(&library, &rows),
-            _ => playlist_m3u8(&library, &rows),
-        };
-        std::fs::write(&path, text).map_err(|e| {
-            AppError::new(ErrorKind::Internal, "The playlist file could not be written.").with_detail(e.to_string())
-        })?;
-        Ok(u32::try_from(rows.len()).unwrap_or(u32::MAX))
+        rbl_app::browse::export_playlist_file(&state, &playlist, &path, &format)
     })
     .await
-}
-
-/// An extended M3U: a line of length and title, then the file, per track.
-fn playlist_m3u8(library: &rbl_index::Library, rows: &[u32]) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::from("#EXTM3U\n");
-    for &row in rows {
-        let i = row as usize;
-        let artist = library.artist_name(row);
-        let title = library.title.get(i);
-        let name = if artist.is_empty() { title.to_owned() } else { format!("{artist} - {title}") };
-        let _ = writeln!(out, "#EXTINF:{},{name}\n{}", library.length_sec.get(i).copied().unwrap_or(0), library.folder_path.get(i));
-    }
-    out
-}
-
-/// rekordbox's tab-separated listing: a header, then one line per track in
-/// the playlist's order, times as `m:ss`.
-fn playlist_txt(library: &rbl_index::Library, rows: &[u32]) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::from("#\tTrack Title\tArtist\tAlbum\tGenre\tBPM\tRating\tTime\tKey\tDate Added\n");
-    let clean = |text: &str| text.replace(['\t', '\n', '\r'], " ");
-    for (n, &row) in rows.iter().enumerate() {
-        let i = row as usize;
-        let secs = library.length_sec.get(i).copied().unwrap_or(0);
-        let bpm = f64::from(library.bpm_x100.get(i).copied().unwrap_or(0)) / 100.0;
-        let _ = writeln!(
-            out,
-            "{}\t{}\t{}\t{}\t{}\t{bpm:.2}\t{}\t{}:{:02}\t{}\t{}",
-            n + 1,
-            clean(library.title.get(i)),
-            clean(library.artist_name(row)),
-            clean(library.album_name(row)),
-            clean(library.genre_name(row)),
-            library.rating.get(i).copied().unwrap_or(0),
-            secs / 60,
-            secs % 60,
-            clean(library.key_name(row)),
-            clean(library.date_added.get(i)),
-        );
-    }
-    out
 }
 
 /// Writes the collection as rekordbox's XML to `path`; resolves to how many
@@ -3148,29 +3042,8 @@ pub async fn filter_values(
     state: State<'_, Arc<AppState>>,
     spec: ViewSpecDto,
 ) -> AppResult<FilterValuesDto> {
-    let library = state.library()?;
-    let parsed = spec_from_wire(&library, &spec);
-    blocking("filter_values", move || {
-        let values = library.filter_values_scoped(&parsed, spec.search_field);
-        Ok(FilterValuesDto {
-            bpms: values
-                .bpms
-                .into_iter()
-                .map(|c| CountedDto { value: c.value, count: c.count })
-                .collect(),
-            keys: values
-                .keys
-                .into_iter()
-                .map(|c| CountedDto { value: c.value, count: c.count })
-                .collect(),
-            tags: values
-                .tags
-                .into_iter()
-                .map(|c| TagCategoryDto { name: c.name, tags: c.tags })
-                .collect(),
-        })
-    })
-    .await
+    let state = Arc::clone(&state);
+    blocking("filter_values", move || rbl_app::browse::filter_values(&state, &spec)).await
 }
 
 #[cfg(test)]

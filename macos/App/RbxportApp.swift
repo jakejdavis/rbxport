@@ -41,6 +41,14 @@ struct RbxportApp: App {
                     ForEach(KeyStyle.allCases, id: \.self) { Text($0.label).tag($0) }
                 }
                 Button("Reset Columns") { model.resetColumns() }
+                Toggle(
+                    "Show Track Filter",
+                    isOn: Binding(get: { model.filterBarOpen }, set: { model.filterBarOpen = $0 })
+                )
+                .keyboardShortcut("f", modifiers: [.command, .option])
+                Toggle(
+                    "Show Playlist Counts",
+                    isOn: Binding(get: { model.sidebar.showChildCounts }, set: { model.sidebar.showChildCounts = $0 }))
             }
         }
     }

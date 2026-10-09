@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use rbl_db::fixture::playlist_id;
 use rbl_ffi::{
     Core, EventListener, ExtraColumn, FfiError, LibraryEvent, LoadOutcome, NodeKind, SearchField, SortKey,
-    TrackSource, ViewSpec, MAX_ROWS,
+    BpmFilter, PlaylistFileFormat, TrackFilter, TrackSource, ViewSpec, MAX_ROWS,
 };
 
 #[derive(Default)]
@@ -26,7 +26,14 @@ fn core() -> (tempfile::TempDir, Arc<Core>, Arc<Recorder>) {
 }
 
 fn spec(source: TrackSource, sort: SortKey, descending: bool, query: &str) -> ViewSpec {
-    ViewSpec { source, sort, descending, query: query.into(), search_field: SearchField::All }
+    ViewSpec {
+        source,
+        sort,
+        descending,
+        query: query.into(),
+        search_field: SearchField::All,
+        filter: TrackFilter::default(),
+    }
 }
 
 #[test]
@@ -102,10 +109,9 @@ fn playlist_and_history_sources_open() {
     assert_eq!(playlist.len, 5);
     let node = core.playlist_tree().unwrap().into_iter().find(|n| n.kind == NodeKind::History).unwrap();
     assert!(core.open_view(spec(TrackSource::History { id: node.id }, SortKey::TrackNo, false, "")).is_ok());
-    assert!(matches!(
-        core.open_view(spec(TrackSource::Folder { path: String::new() }, SortKey::TrackNo, false, "")),
-        Err(FfiError::Malformed { .. })
-    ));
+    // The section heading of the Explorer lists nothing, and is not an error.
+    let heading = core.open_view(spec(TrackSource::Folder { path: String::new() }, SortKey::TrackNo, false, "")).unwrap();
+    assert_eq!(heading.len, 0);
 }
 
 #[test]
@@ -159,4 +165,153 @@ fn search_field_scopes_the_query() {
     assert_eq!(by(SearchField::Title, "Track"), 40);
     assert_eq!(by(SearchField::Artist, "Track"), 0);
     assert_eq!(by(SearchField::All, "Track"), 40);
+}
+
+fn collection() -> ViewSpec {
+    spec(TrackSource::Collection, SortKey::Title, false, "")
+}
+
+#[test]
+fn filter_values_count_the_unfiltered_list() {
+    let (_dir, core, _) = core();
+    let values = core.filter_values(collection()).unwrap();
+    // The fixture's tempos are 128.00 to 128.39, and it has no keys.
+    assert_eq!(values.bpms.iter().map(|c| (c.value, c.count)).collect::<Vec<_>>(), [(128, 40)]);
+    assert!(values.keys.is_empty());
+
+    // A pick in the spec's own filter does not narrow what the bar offers.
+    let picked = ViewSpec {
+        filter: TrackFilter { bpm: Some(BpmFilter { values: vec![values.bpms[0].value], ..Default::default() }), ..Default::default() },
+        ..collection()
+    };
+    assert_eq!(core.filter_values(picked).unwrap(), values);
+}
+
+#[test]
+fn a_filtered_view_opens_with_only_the_picks() {
+    let (_dir, core, _) = core();
+    let values = core.filter_values(collection()).unwrap();
+
+    // A ticked key column naming a key the library lacks matches nothing.
+    let by_key = ViewSpec {
+        filter: TrackFilter { keys: Some(vec!["8A".into()]), ..Default::default() },
+        ..collection()
+    };
+    assert_eq!(core.open_view(by_key).unwrap().len, 0);
+
+    let bpm = &values.bpms[0];
+    let by_bpm = ViewSpec {
+        filter: TrackFilter { bpm: Some(BpmFilter { values: vec![bpm.value], ..Default::default() }), ..Default::default() },
+        ..collection()
+    };
+    assert_eq!(core.open_view(by_bpm).unwrap().len, bpm.count);
+
+    let off_bpm = ViewSpec {
+        filter: TrackFilter { bpm: Some(BpmFilter { values: vec![90], ..Default::default() }), ..Default::default() },
+        ..collection()
+    };
+    assert_eq!(core.open_view(off_bpm).unwrap().len, 0);
+    let rated = |ratings: Vec<u8>| ViewSpec {
+        filter: TrackFilter { ratings: Some(ratings), ..Default::default() },
+        ..collection()
+    };
+    assert_eq!(core.open_view(rated(vec![0])).unwrap().len, 40);
+    assert_eq!(core.open_view(rated(vec![4, 5])).unwrap().len, 0);
+
+    // Ticked and empty matches nothing; unticked (None) matches everything.
+    let none = ViewSpec { filter: TrackFilter { ratings: Some(vec![]), ..Default::default() }, ..collection() };
+    assert_eq!(core.open_view(none).unwrap().len, 0);
+    assert_eq!(core.open_view(collection()).unwrap().len, 40);
+
+    let colour = ViewSpec { filter: TrackFilter { colors: Some(vec!["Nonexistent".into()]), ..Default::default() }, ..collection() };
+    assert_eq!(core.open_view(colour).unwrap().len, 0);
+}
+
+#[test]
+fn the_tag_list_source_opens_empty() {
+    let (_dir, core, _) = core();
+    let view = core.open_view(spec(TrackSource::TagList, SortKey::TrackNo, false, "")).unwrap();
+    assert_eq!(view.len, 0);
+}
+
+fn explorer_tree() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    for sub in ["b-dir", "a-dir", "a-dir/nested"] {
+        std::fs::create_dir_all(dir.path().join(sub)).unwrap();
+    }
+    std::fs::write(dir.path().join("one.mp3"), b"not really audio").unwrap();
+    std::fs::write(dir.path().join("two.flac"), b"not really audio").unwrap();
+    std::fs::write(dir.path().join("cover.jpg"), b"x").unwrap();
+    dir
+}
+
+#[test]
+fn explorer_lists_roots_and_subfolders_by_name() {
+    let (_dir, core, _) = core();
+    assert!(!core.explorer_roots().unwrap().is_empty());
+    let tree = explorer_tree();
+    let children = core.explorer_children(tree.path().to_string_lossy().into_owned()).unwrap();
+    assert_eq!(children.names, ["a-dir", "b-dir"]);
+    assert_eq!(children.total, 2);
+    let missing = core.explorer_children(tree.path().join("nope").to_string_lossy().into_owned()).unwrap();
+    assert!(missing.names.is_empty());
+}
+
+#[test]
+fn a_folder_view_opens_pages_and_selects_loose_files() {
+    let (_dir, core, _) = core();
+    let tree = explorer_tree();
+    let path = tree.path().to_string_lossy().into_owned();
+    let view = core.open_view(spec(TrackSource::Folder { path }, SortKey::FileName, false, "")).unwrap();
+    assert_eq!(view.len, 2);
+    let rows = core.fetch_rows(view.view_id, 0, 10, vec![]).unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|r| r.id.starts_with("file:")));
+    assert_eq!(rows[0].file_name, "one.mp3");
+    assert_eq!(core.view_ids_in_range(view.view_id, 0, 1).unwrap().len(), 2);
+    assert_eq!(core.track_path(rows[0].id.clone()).unwrap(), tree.path().join("one.mp3").to_string_lossy());
+
+    let searched = core.open_view(spec(
+        TrackSource::Folder { path: tree.path().to_string_lossy().into_owned() },
+        SortKey::FileName,
+        false,
+        "two",
+    ));
+    assert_eq!(searched.unwrap().len, 1);
+}
+
+#[test]
+fn track_path_and_devices() {
+    let (_dir, core, _) = core();
+    let view = core.open_view(collection()).unwrap();
+    let rows = core.fetch_rows(view.view_id, 0, 1, vec![]).unwrap();
+    assert!(!core.track_path(rows[0].id.clone()).unwrap().is_empty());
+    assert!(matches!(core.track_path("nope".into()), Err(FfiError::NotFound { .. })));
+    // Listing must not fail, whatever is mounted.
+    core.list_devices().unwrap();
+}
+
+#[test]
+fn a_playlist_exports_to_m3u8_and_txt() {
+    let (_dir, core, _) = core();
+    let out = tempfile::tempdir().unwrap();
+    let m3u8 = out.path().join("list.m3u8");
+    let n = core
+        .export_playlist_file(playlist_id(0), m3u8.to_string_lossy().into_owned(), PlaylistFileFormat::M3u8)
+        .unwrap();
+    assert_eq!(n, 5);
+    let text = std::fs::read_to_string(&m3u8).unwrap();
+    assert!(text.starts_with("#EXTM3U\n"));
+    assert_eq!(text.matches("#EXTINF").count(), 5);
+
+    let txt = out.path().join("list.txt");
+    core.export_playlist_file(playlist_id(0), txt.to_string_lossy().into_owned(), PlaylistFileFormat::Txt).unwrap();
+    let text = std::fs::read_to_string(&txt).unwrap();
+    assert!(text.starts_with("#\tTrack Title"));
+    assert_eq!(text.lines().count(), 6);
+
+    assert!(matches!(
+        core.export_playlist_file("999999".into(), txt.to_string_lossy().into_owned(), PlaylistFileFormat::Txt),
+        Err(FfiError::NotFound { .. })
+    ));
 }
