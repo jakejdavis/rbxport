@@ -17,18 +17,14 @@
 //! scan past an incomplete header while finding the next packet. Decode
 //! failures still reach us through `rbl_deck`.
 
-use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
-/// Where the log files go: `<data dir>/rbxport/logs`, beside the backups,
-/// unless `RBXPORT_LOG_DIR` names somewhere else.
-const LOG_DIR: &str = "rbxport/logs";
 /// Names the log directory, for a test or a support case.
-pub const LOG_DIR_ENV: &str = "RBXPORT_LOG_DIR";
+pub use rbl_app::logs::{latest_log_file, log_dir, LOG_DIR_ENV};
 /// Daily files older than the newest this many are removed.
 const KEEP_FILES: usize = 5;
 
@@ -78,40 +74,6 @@ fn filter() -> (EnvFilter, Option<String>) {
 /// Keeps the file writer's background thread alive for the life of the
 /// process; dropped, it would flush and stop.
 static FILE_GUARD: OnceLock<tracing_appender::non_blocking::WorkerGuard> = OnceLock::new();
-
-/// The directory the log files are written to.
-pub fn log_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os(LOG_DIR_ENV).filter(|d| !d.is_empty()) {
-        return PathBuf::from(dir);
-    }
-    dirs::data_dir().unwrap_or_else(std::env::temp_dir).join(LOG_DIR)
-}
-
-/// The newest daily log, which is the file this process is currently writing.
-/// Daily filenames put their ISO date between the fixed prefix and suffix, so
-/// filename order is date order and does not depend on buffered writes having
-/// updated filesystem timestamps yet.
-pub fn latest_log_file() -> std::io::Result<Option<PathBuf>> {
-    latest_log_file_in(&log_dir())
-}
-
-fn latest_log_file_in(dir: &Path) -> std::io::Result<Option<PathBuf>> {
-    let mut newest: Option<(String, PathBuf)> = None;
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_file() {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if !name.starts_with("rbxport.") || Path::new(&name).extension().is_none_or(|ext| ext != "log") {
-            continue;
-        }
-        if newest.as_ref().is_none_or(|(current, _)| name > *current) {
-            newest = Some((name, entry.path()));
-        }
-    }
-    Ok(newest.map(|(_, path)| path))
-}
 
 /// Installs the logger, and a panic hook that puts a panic in the log rather
 /// than on a stderr nobody is watching.
@@ -172,25 +134,5 @@ mod tests {
         assert!(filter.contains("rbl_link=trace"));
         assert!(filter.contains("rbxport=trace"));
         assert!(filter_for("error").starts_with("error,"));
-    }
-
-    #[test]
-    fn latest_log_is_the_newest_daily_file() {
-        let dir = tempfile::tempdir().expect("temporary log directory");
-        for name in [
-            "rbxport.2026-09-22.log",
-            "rbxport.2026-09-24.log",
-            "rbxport.2026-09-23.log",
-            "notes.log",
-        ] {
-            std::fs::write(dir.path().join(name), name).expect("test log");
-        }
-        std::fs::create_dir(dir.path().join("rbxport.2099-01-01.log"))
-            .expect("lookalike directory");
-
-        assert_eq!(
-            latest_log_file_in(dir.path()).expect("scan logs"),
-            Some(dir.path().join("rbxport.2026-09-24.log")),
-        );
     }
 }

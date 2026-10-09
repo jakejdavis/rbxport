@@ -42,41 +42,9 @@ pub async fn report_attachment(player: State<'_, std::sync::Arc<crate::player::P
         let sample = crate::diagnostics::sample_shared();
         let _ = writeln!(text, "Process CPU: {:.1}% of one core\nResident memory: {:.1} MiB", sample.cpu, sample.memory_mb);
         text.push_str("\nApplication log (latest file)\n");
-        text.push_str(&log_file(&crate::logging::log_dir())?);
+        text.push_str(&rbl_app::logs::read_latest(&crate::logging::log_dir())?);
         Ok(text)
     }).await
-}
-
-fn log_file(dir: &std::path::Path) -> AppResult<String> {
-    let mut paths: Vec<_> = match std::fs::read_dir(dir) {
-        Ok(entries) => entries.filter_map(Result::ok).map(|entry| entry.path())
-            .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("rbxport")) && p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("log"))).collect(),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok("No application log available.\n".into()),
-        Err(e) => return Err(AppError::internal(format!("The log directory could not be read: {e}"))),
-    };
-    paths.sort();
-    let Some(path) = paths.last() else { return Ok("No application log available.\n".into()) };
-    let bytes = std::fs::read(path).map_err(|e| AppError::internal(e.to_string()))?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
-}
-
-#[cfg(test)]
-#[allow(clippy::expect_used)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn report_log_preserves_the_entire_file_verbatim() {
-        let directory = tempfile::tempdir().expect("temporary log directory");
-        let log = format!(
-            "email=dj@example.com path=/Users/dj/Music title=Unreleased Track custom-field=visible\n{}\nend of log\n",
-            "x".repeat(1_048_576),
-        );
-        std::fs::write(directory.path().join("rbxport.2026-10-06.log"), &log)
-            .expect("write report log");
-
-        assert_eq!(log_file(directory.path()).expect("read report log"), log);
-    }
 }
 
 /// Open a copy of the exact attachment captured by the report form.

@@ -198,9 +198,7 @@ struct AppCommands: Commands {
 
         // Help
         CommandGroup(replacing: .help) {
-            Button("Report a Problem\u{2026}") {
-                if let url = URL(string: "https://github.com/chrisle/rbxport/issues") { NSWorkspace.shared.open(url) }
-            }
+            Button("Report a Problem\u{2026}") { openWindow(id: BugReportScene.id) }
         }
     }
 }

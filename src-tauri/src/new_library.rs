@@ -7,7 +7,7 @@ use tauri::{Manager, State};
 
 use crate::commands::blocking;
 use crate::dto::LibraryProblemDto;
-use crate::error::{AppError, AppResult, ErrorKind};
+use crate::error::AppResult;
 use crate::state::AppState;
 
 /// Why the library did not load, or nothing while it is loading or loaded.
@@ -27,14 +27,7 @@ pub fn library_problem(state: State<'_, Arc<AppState>>) -> Option<LibraryProblem
 pub async fn create_library(app: tauri::AppHandle) -> AppResult<()> {
     let handle = app.clone();
     blocking("create_library", move || {
-        let plan = rbl_db::new_library::plan()
-            .map_err(|e| AppError::new(ErrorKind::NotFound, "Could not find where the library should go.").with_detail(e.to_string()))?;
-        if let Some(plan) = plan {
-            let made = rbl_db::new_library::create(&plan).map_err(|e| {
-                AppError::new(ErrorKind::Internal, format!("Could not make the library: {e}")).with_detail(e.to_string())
-            })?;
-            tracing::info!(path = %made.master_db.display(), "made a new library");
-        }
+        rbl_app::new_library::create(None)?;
         handle.state::<Arc<AppState>>().set_library_problem(None);
         crate::spawn_library_load(handle);
         Ok(())

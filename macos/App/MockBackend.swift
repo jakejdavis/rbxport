@@ -115,6 +115,8 @@ actor MockBackend: BackendProtocol {
     var imports5b = MockImportScript()
     /// What the Phase 5c LINK calls answer, and what they were asked. Nothing here opens a socket.
     var link5c = MockLinkScript()
+    /// What the Phase 6b backup, report and new-library calls answer, and what they were asked.
+    var chrome6b = MockChromeScript()
     var filterValuesAnswer = FilterValues(
         bpms: [CountedBpm(value: 120, count: 50), CountedBpm(value: 128, count: 5)],
         keys: [CountedKey(value: "Am", count: 3), CountedKey(value: "C", count: 2)], tags: [])

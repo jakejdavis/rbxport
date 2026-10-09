@@ -30,6 +30,9 @@ rbl-deck = { path = "../rbl-deck" }
 rbl-export = { path = "../rbl-export" }
 rbl-index = { path = "../rbl-index" }
 serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = { workspace = true }
 uniffi = "0.32"
 

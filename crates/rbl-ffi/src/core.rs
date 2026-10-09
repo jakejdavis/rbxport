@@ -8,7 +8,7 @@ use std::time::Instant;
 use rbl_app::dto::LibraryProblemDto;
 use rbl_app::error::run_command;
 use rbl_app::state::AppState;
-use rbl_app::{analysis, browse, cues, itunes, usb_import, details, device_settings, devices, edits, explorer, export, grid, import, maintenance, media, startup, track_data, track_edits, AppError, AppEvent, AppResult, EventSink};
+use rbl_app::{backups, new_library, analysis, browse, cues, itunes, usb_import, details, device_settings, devices, edits, explorer, export, grid, import, maintenance, media, startup, track_data, track_edits, AppError, AppEvent, AppResult, EventSink};
 use rbl_db::{Library as Db, LibraryLocation, OpenMode};
 
 use crate::error::FfiError;
@@ -16,6 +16,7 @@ use crate::devices::{ItunesLibrary, ItunesTrack, UsbImportReport, DeviceSettings
 use crate::events::{EventListener, ListenerSink};
 use crate::link::{LinkPeer, LinkStatus};
 use crate::playback::{Playback, PlaybackListener};
+use crate::support::{self, BackupInfo, BackupProgress, NewLibraryPlan, SystemReport};
 use crate::types::{
     AnalysisResult, AnalysisSettings, Beat, Cue, CueSlot, GridEdit, GridState, Phrase, EditHistory, SmartRule, TrackField, ImportReport, XmlImportReport, MissingTracks, Duplicates, RelocateReport, Device, ExplorerChildren, ExplorerRoot, ExtraColumn, FilterValues, LibraryProblem, PlaylistFileFormat, LibrarySummary, LoadOutcome, Row, TrackDetails, TrackLookups, TreeNode, ViewHandle, ViewSpec, WaveformKind,
 };
@@ -138,6 +139,84 @@ impl Core {
     /// Why the last load failed, if it did.
     pub fn library_problem(&self) -> Option<LibraryProblem> {
         self.state.library_problem().map(Into::into)
+    }
+
+    // MARK: Backups. Explicit snapshots of the library; no edit is made while one runs.
+
+    /// Starts a backup on its own thread; progress arrives as `BackupProgress` events and
+    /// `backup_progress` answers at any time. Refused while one is running.
+    pub fn start_backup(&self) -> Result<(), FfiError> {
+        let sink: Arc<dyn EventSink> = Arc::new(ListenerSink(Arc::clone(&self.listener)));
+        ffi("start_backup", || backups::start_with_sink(Arc::clone(&self.state), Some(sink)))
+    }
+
+    /// Asks the running backup to stop; it removes what it had written.
+    pub fn cancel_backup(&self) {
+        backups::cancel(&self.state);
+    }
+
+    pub fn backup_progress(&self) -> BackupProgress {
+        backups::progress(&self.state).into()
+    }
+
+    /// Archives in the backup folder, newest first.
+    pub fn list_backups(&self) -> Result<Vec<BackupInfo>, FfiError> {
+        ffi("list_backups", || backups::list(&self.state)).map(|l| l.into_iter().map(Into::into).collect())
+    }
+
+    /// Removes one archive of this library from the backup folder.
+    pub fn delete_backup(&self, path: String) -> Result<(), FfiError> {
+        ffi("delete_backup", || backups::delete(&self.state, Path::new(&path)))
+    }
+
+    /// The folder new backups go to.
+    pub fn backup_directory(&self) -> String {
+        self.state.backup_destination().to_string_lossy().into_owned()
+    }
+
+    /// Moves new backups to `directory` (checked, remembered). Returns the folder as kept.
+    pub fn set_backup_directory(&self, directory: String) -> Result<String, FfiError> {
+        ffi("set_backup_directory", || self.state.set_backup_destination(Path::new(&directory)))
+    }
+
+    /// Makes the backup folder if it is not there yet, so it can be shown in the Finder.
+    pub fn ensure_backup_directory(&self) -> Result<String, FfiError> {
+        ffi("ensure_backup_directory", || {
+            let dir = self.state.backup_destination();
+            std::fs::create_dir_all(&dir)
+                .map_err(|e| AppError::internal("The backup folder could not be created.").with_detail(e.to_string()))?;
+            Ok(dir.to_string_lossy().into_owned())
+        })
+    }
+
+    // MARK: Bug report and log
+
+    /// The build, the machine, this process and the end of the log. Nothing leaves the computer.
+    pub fn system_report(&self) -> SystemReport {
+        support::system_report()
+    }
+
+    // MARK: A new library
+
+    /// What making a library now would do, or `None` when there is a database already.
+    pub fn plan_new_library(&self) -> Result<Option<NewLibraryPlan>, FfiError> {
+        ffi("plan_new_library", || match &self.source {
+            Source::Installed { .. } => new_library::plan(),
+            Source::Fixture { .. } => Ok(None),
+        })
+        .map(|p| p.map(Into::into))
+    }
+
+    /// Makes an empty library and loads it, as startup would; `LibraryReady` follows. `folder`
+    /// is used only when `plan_new_library` said the place can be chosen. Planned again here: a
+    /// library that has appeared since is loaded, never replaced. Blocking.
+    pub fn create_library(&self, folder: Option<String>) -> Result<LoadOutcome, FfiError> {
+        ffi("create_library", || match &self.source {
+            Source::Installed { .. } => new_library::create(folder.as_deref().map(Path::new)).map(|_| ()),
+            Source::Fixture { .. } => Err(AppError::internal("A fixture library cannot make a new one.")),
+        })?;
+        self.state.set_library_problem(None);
+        Ok(self.load_library())
     }
 
     pub fn summary(&self) -> Result<LibrarySummary, FfiError> {

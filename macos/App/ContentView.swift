@@ -6,26 +6,35 @@ struct ContentView: View {
 
     var body: some View {
         @Bindable var model = model
+        Group {
+            content
+        }
+        .background(WindowAccessor { model.windowGeometry.attach($0) })
+        .sheet(item: $model.newLibrary) { NewLibrarySheet(model: $0) }
+        .onChange(of: model.reportWindowRequests) { openWindow(id: BugReportScene.id) }
+    }
+
+    @ViewBuilder private var content: some View {
+        @Bindable var model = model
         switch model.phase {
         case .loading:
             VStack(spacing: 12) {
                 ProgressView()
-                Text("Opening your rekordbox library...").foregroundStyle(.secondary)
+                Text("Loading the library\u{2026}").foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        case .failed(let message):
-            ContentUnavailableView {
-                Label("Could not open the library", systemImage: "exclamationmark.triangle")
-            } description: {
-                Text(message)
-            } actions: {
-                Text("rbxport opens ~/Library/Pioneer/rekordbox read-only. Is rekordbox installed?")
-                    .font(.footnote).foregroundStyle(.secondary)
+            .accessibilityIdentifier("library-loading")
+        case .failed, .missing:
+            if let info = model.libraryProblemInfo {
+                LibraryProblemView(info: info) { action in Task { await model.perform(action) } }
             }
         case .ready:
             NavigationSplitView {
                 SidebarView()
-                    .navigationSplitViewColumnWidth(min: 180, ideal: 240)
+                    .navigationSplitViewColumnWidth(
+                        min: WindowGeometryStore.sidebarRange.lowerBound, ideal: model.geometry.initialSidebarWidth,
+                        max: WindowGeometryStore.sidebarRange.upperBound)
+                    .onGeometryChange(for: Double.self, of: { Double($0.size.width) }) { model.geometry.setSidebarWidth($0) }
             } detail: {
                 DetailView()
             }
@@ -158,7 +167,10 @@ struct DetailView: View {
         }
         .inspector(isPresented: $model.infoPanelOpen) {
             InfoPanelView(model: model.info)
-                .inspectorColumnWidth(min: 220, ideal: 280, max: 420)
+                .inspectorColumnWidth(
+                    min: WindowGeometryStore.infoRange.lowerBound, ideal: model.geometry.initialInfoWidth,
+                    max: WindowGeometryStore.infoRange.upperBound)
+                .onGeometryChange(for: Double.self, of: { Double($0.size.width) }) { model.geometry.setInfoWidth($0) }
         }
         .overlay(alignment: .top) {
             if let error = model.viewError {

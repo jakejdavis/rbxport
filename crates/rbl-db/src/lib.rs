@@ -105,6 +105,10 @@ pub enum OpenMode {
 /// see `scripts/e2e-win/`. Unset in ordinary use.
 pub const OPTIONS_ENV: &str = "RBXPORT_OPTIONS";
 
+/// Names the folder a new library goes in when there is no `options.json` to
+/// say, instead of rekordbox's own. For test machines, with [`OPTIONS_ENV`].
+pub const DEFAULT_DIR_ENV: &str = "RBXPORT_DEFAULT_LIBRARY_DIR";
+
 /// The agent's options file, which holds the db path and the wrapped passphrase.
 fn options_path() -> Result<PathBuf> {
     let path = options_location()?;
@@ -136,6 +140,9 @@ pub(crate) fn options_location() -> Result<PathBuf> {
 /// otherwise: `~/Library/Pioneer/rekordbox` on macOS,
 /// `%APPDATA%\Pioneer\rekordbox` on Windows [OBS 7.2.11, 7.2.14].
 pub(crate) fn default_library_dir() -> Result<PathBuf> {
+    if let Some(chosen) = std::env::var_os(DEFAULT_DIR_ENV).filter(|d| !d.is_empty()) {
+        return Ok(PathBuf::from(chosen));
+    }
     let base = if cfg!(target_os = "windows") {
         dirs::config_dir()
     } else {

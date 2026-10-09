@@ -37,6 +37,8 @@ pub enum AppEvent {
     ExportDone(ExportReportDto),
     /// One step of a sync to one stick.
     SyncProgress(SyncProgressDto),
+    /// A library backup moved on (phase, bytes) or ended. Raised for front ends that do not poll.
+    BackupProgress(crate::backups::BackupProgress),
     /// LINK changed: on or off, or the players on it.
     LinkStatus(LinkStatusDto),
     /// The set of players and mixers heard on the network changed.
@@ -60,6 +62,7 @@ impl AppEvent {
             Self::ExportProgress(_) => "export:progress",
             Self::ExportDone(_) => "export:done",
             Self::SyncProgress(_) => "sync:progress",
+            Self::BackupProgress(_) => "backup:progress",
             Self::LinkStatus(_) => "link:status",
             Self::LinkPeers(_) => "link:peers",
         }
@@ -79,6 +82,7 @@ impl Serialize for AppEvent {
             Self::ImportProgress(progress) | Self::ExportProgress(progress) => progress.serialize(serializer),
             Self::ExportDone(report) => report.serialize(serializer),
             Self::SyncProgress(progress) => progress.serialize(serializer),
+            Self::BackupProgress(progress) => progress.serialize(serializer),
             Self::LinkStatus(status) => status.serialize(serializer),
             Self::LinkPeers(peers) => peers.serialize(serializer),
         }
@@ -134,6 +138,9 @@ mod tests {
         let peers = AppEvent::LinkPeers(vec![crate::link::PeerDto { number: 2, name: "CDJ".into(), kind: "player".into(), address: "10.0.0.2".into() }]);
         assert_eq!(peers.name(), "link:peers");
         assert_eq!(serde_json::to_string(&peers).unwrap(), r#"[{"number":2,"name":"CDJ","kind":"player","address":"10.0.0.2"}]"#);
+        let backup = AppEvent::BackupProgress(crate::backups::BackupProgress { running: true, phase: "copying".into(), copied_bytes: 5, total_bytes: 9, ..Default::default() });
+        assert_eq!(backup.name(), "backup:progress");
+        assert_eq!(serde_json::to_value(&backup).unwrap()["copiedBytes"], 5);
         let problem = AppEvent::LibraryProblem(LibraryProblemDto::Failed { message: "x".into() });
         assert_eq!(serde_json::to_string(&problem).unwrap(), r#"{"kind":"failed","message":"x"}"#);
     }

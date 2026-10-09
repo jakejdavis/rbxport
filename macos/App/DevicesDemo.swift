@@ -21,7 +21,10 @@ enum DeviceDemoGuard {
     /// `/Volumes`, the home folder or the root.
     static func isTemporary(_ path: String, roots: [String] = temporaryRoots()) -> Bool {
         let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
-        return roots.contains { root in root.count > 1 && resolved.hasPrefix(root + "/") }
+        // `/tmp` and `/private/tmp` are one place, but a path that does not exist yet resolves to
+        // whichever spelling it was given.
+        let spellings = [resolved, resolved.hasPrefix("/private/") ? String(resolved.dropFirst(8)) : "/private" + resolved]
+        return roots.contains { root in root.count > 1 && spellings.contains { $0.hasPrefix(root + "/") } }
     }
 
     /// The fake volumes named by the environment, when every one of them is a temporary directory.
