@@ -29,7 +29,8 @@ struct TrackTable: NSViewRepresentable {
         table.delegate = context.coordinator
         table.target = context.coordinator
         table.doubleAction = #selector(Coordinator.rowDoubleClicked)
-        table.onReturn = { [weak coordinator = context.coordinator] shift in coordinator?.loadSelectedToDeck(deck: shift ? .b : .a) }
+        table.onLoad = { [weak coordinator = context.coordinator] deck in coordinator?.loadSelectedToDeck(deck: deck) }
+        table.keymap = { [weak model] in model?.prefs.keymap ?? Keymap() }
         table.onEscape = { [weak model] in model?.clearSearch() }
         table.menuProvider = { [weak coordinator = context.coordinator] row in coordinator?.menu(forRow: row) }
         table.onDelete = { [weak model] in
@@ -575,10 +576,13 @@ enum ColumnSizer {
 
 /// `NSTableView` plus the keys rekordbox users expect: Home/End, Page Up/Down and
 /// Command-Up/Down move the selection (Shift extends it), Return loads, Escape clears search.
+/// Which key does which comes from the binding table (`Keymap`); Delete is the system's.
 final class TrackNSTableView: NSTableView {
-    /// Return loads onto deck A; Shift-Return (the flag) onto deck B.
-    var onReturn: ((Bool) -> Void)?
+    /// Return loads onto deck A; Shift-Return onto deck B.
+    var onLoad: ((Deck) -> Void)?
     var onEscape: (() -> Void)?
+    /// The binding table, with the person's keys.
+    var keymap: () -> Keymap = { Keymap() }
     /// Delete or forward-delete.
     var onDelete: (() -> Void)?
     /// The menu for a right-click on a row (-1 when it hit no row).
@@ -590,16 +594,33 @@ final class TrackNSTableView: NSTableView {
 
     override func keyDown(with event: NSEvent) {
         let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
-        let extend = flags.contains(.shift)
-        let plain = flags.subtracting(.shift)
-        switch (event.keyCode, plain) {
-        case (36, []), (76, []): onReturn?(extend)
-        case (53, []): onEscape?()
+        let map = keymap()
+        var chord = Chord(event: event)
+        var binding = map.binding(for: chord, owner: .table, scope: .table)
+        var extend = false
+        if binding == nil, flags.contains(.shift) {
+            // Shift on a movement key extends the selection instead.
+            chord.shift = false
+            if let found = map.binding(for: chord, owner: .table, scope: .table), case .table(let key) = found.command,
+                [.toTop, .toBottom, .pageUp, .pageDown].contains(key)
+            {
+                binding = found
+                extend = true
+            }
+        }
+        if let binding, case .table(let key) = binding.command {
+            switch key {
+            case .loadToDeck(let deck): onLoad?(deck)
+            case .clearSearch: onEscape?()
+            case .toTop: move(to: 0, extending: extend)
+            case .toBottom: move(to: numberOfRows - 1, extending: extend)
+            case .pageUp: page(up: true, extending: extend)
+            case .pageDown: page(up: false, extending: extend)
+            }
+            return
+        }
+        switch (event.keyCode, flags) {
         case (51, []), (117, []): onDelete?()
-        case (115, []), (126, .command): move(to: 0, extending: extend)  // Home, Cmd-Up
-        case (119, []), (125, .command): move(to: numberOfRows - 1, extending: extend)  // End, Cmd-Down
-        case (116, []): page(up: true, extending: extend)
-        case (121, []): page(up: false, extending: extend)
         default: super.keyDown(with: event)
         }
     }

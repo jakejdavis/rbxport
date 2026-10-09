@@ -4,86 +4,77 @@ import Observation
 
 // MARK: - Preferences
 
-/// The export preferences, persisted in `UserDefaults` under the names the React app used
+/// The export preferences, kept in the preferences store under the names the React app used
 /// (`usbExport.*`, `djSystem.*`). The dead "Setup PIONEER folder" switch is not carried over.
-struct DeviceExportPrefs {
-    let defaults: UserDefaults
+@MainActor struct DeviceExportPrefs {
+    let store: PreferencesStore
 
-    private enum Keys {
-        static let deleteUnlisted = "usbExport.deleteUnlistedMusic"
-        static let ejectAfterSync = "usbExport.ejectAfterSync"
-        static let maxCompatibility = "usbExport.maximumCompatibility"
-        static let conversionFormat = "usbExport.conversionFormat"
-        static let waveformColor = "djSystem.waveformColor"
-        static let waveformPosition = "djSystem.waveformPosition"
-        static let overviewWaveform = "djSystem.overviewWaveform"
-        static let keyDisplay = "djSystem.keyDisplay"
-        static let importCues = "usbExport.importButtonCues"
-        static let importHistory = "usbExport.importButtonHistory"
-        static let importSettings = "usbExport.importButtonSettings"
-    }
+    init(store: PreferencesStore) { self.store = store }
+
+    init(defaults: UserDefaults) { store = PreferencesStore(defaults: defaults) }
 
     /// The ticks the Import from USB sheet opens with (the React names; cues and history on, settings off).
     var importButtonCues: Bool {
-        get { (defaults.object(forKey: Keys.importCues) as? Bool) ?? true }
-        nonmutating set { defaults.set(newValue, forKey: Keys.importCues) }
+        get { store.importButtonCues }
+        nonmutating set { store.importButtonCues = newValue }
     }
     var importButtonHistory: Bool {
-        get { (defaults.object(forKey: Keys.importHistory) as? Bool) ?? true }
-        nonmutating set { defaults.set(newValue, forKey: Keys.importHistory) }
+        get { store.importButtonHistory }
+        nonmutating set { store.importButtonHistory = newValue }
     }
     var importButtonSettings: Bool {
-        get { (defaults.object(forKey: Keys.importSettings) as? Bool) ?? false }
-        nonmutating set { defaults.set(newValue, forKey: Keys.importSettings) }
+        get { store.importButtonSettings }
+        nonmutating set { store.importButtonSettings = newValue }
     }
 
     /// Cuts a stick down to the selection, removing unlisted music. Off by default.
     var deleteUnlistedMusic: Bool {
-        get { defaults.bool(forKey: Keys.deleteUnlisted) }
-        nonmutating set { defaults.set(newValue, forKey: Keys.deleteUnlisted) }
+        get { store.deleteUnlistedMusic }
+        nonmutating set { store.deleteUnlistedMusic = newValue }
     }
 
     var ejectAfterSync: Bool {
-        get { defaults.bool(forKey: Keys.ejectAfterSync) }
-        nonmutating set { defaults.set(newValue, forKey: Keys.ejectAfterSync) }
+        get { store.ejectAfterSync }
+        nonmutating set { store.ejectAfterSync = newValue }
     }
 
     /// Maximum CDJ compatibility: convert formats a player cannot read on export.
     var maximumCompatibility: Bool {
-        get { defaults.bool(forKey: Keys.maxCompatibility) }
-        nonmutating set { defaults.set(newValue, forKey: Keys.maxCompatibility) }
+        get { store.maximumCompatibility }
+        nonmutating set { store.maximumCompatibility = newValue }
     }
 
     var conversionFormat: CompatibilityFormat {
         get {
-            switch defaults.string(forKey: Keys.conversionFormat) {
-            case "aiff": .aiff
-            case "mp3": .mp3
-            default: .wav
+            switch store.conversionFormat {
+            case .aiff: .aiff
+            case .mp3: .mp3
+            case .wav: .wav
             }
         }
         nonmutating set {
-            let name =
+            store.conversionFormat =
                 switch newValue {
-                case .wav: "wav"
-                case .aiff: "aiff"
-                case .mp3: "mp3"
+                case .wav: .wav
+                case .aiff: .aiff
+                case .mp3: .mp3
                 }
-            defaults.set(name, forKey: Keys.conversionFormat)
         }
     }
 
     /// What a stick with no settings of its own is given (the DJ System defaults).
     var stickDefaults: StickDefaults {
-        StickDefaults(
-            waveformColor: Self.pick(defaults.string(forKey: Keys.waveformColor), ["blue": .blue, "rgb": .rgb], else: .threeBand),
-            waveformPosition: Self.pick(defaults.string(forKey: Keys.waveformPosition), ["left": .left], else: .center),
-            overviewWaveform: Self.pick(defaults.string(forKey: Keys.overviewWaveform), ["full": .full], else: .half),
-            keyDisplay: Self.pick(defaults.string(forKey: Keys.keyDisplay), ["alphanumeric": .alphanumeric], else: .classic))
-    }
-
-    private static func pick<T>(_ name: String?, _ table: [String: T], else fallback: T) -> T {
-        name.flatMap { table[$0] } ?? fallback
+        let color: WaveformColor =
+            switch store.djWaveformColor {
+            case .blue: .blue
+            case .rgb: .rgb
+            case .threeBand: .threeBand
+            }
+        return StickDefaults(
+            waveformColor: color,
+            waveformPosition: store.djWaveformPosition == .left ? .left : .center,
+            overviewWaveform: store.djOverview == .full ? .full : .half,
+            keyDisplay: store.djKeyDisplay == .alphanumeric ? .alphanumeric : .classic)
     }
 
     func options(ejectAfterSync eject: Bool = false) -> ExportOptions {

@@ -12,33 +12,25 @@ enum LinkKeySort: String, CaseIterable, Sendable {
     case alphabetical
 }
 
-/// The LINK preferences, under the names the React app used (`djSystem.*`).
-struct LinkPrefs {
-    let defaults: UserDefaults
-
-    private enum Keys {
-        static let interface = "djSystem.linkInterface"
-        static let autoJoin = "djSystem.autoJoinLink"
-        static let keySort = "djSystem.linkKeySort"
-    }
+/// The LINK preferences, kept in the store under the names the React app used (`djSystem.*`).
+@MainActor struct LinkPrefs {
+    let store: PreferencesStore
 
     /// The chosen interface name; nil is Automatic.
     var interface: String? {
-        get { defaults.string(forKey: Keys.interface) }
-        nonmutating set {
-            if let newValue { defaults.set(newValue, forKey: Keys.interface) } else { defaults.removeObject(forKey: Keys.interface) }
-        }
+        get { store.linkInterface }
+        nonmutating set { store.linkInterface = newValue }
     }
 
     /// Off unless the person turned it on.
     var autoJoin: Bool {
-        get { defaults.bool(forKey: Keys.autoJoin) }
-        nonmutating set { defaults.set(newValue, forKey: Keys.autoJoin) }
+        get { store.autoJoinLink }
+        nonmutating set { store.autoJoinLink = newValue }
     }
 
     var keySort: LinkKeySort {
-        get { defaults.string(forKey: Keys.keySort).flatMap(LinkKeySort.init) ?? .musical }
-        nonmutating set { defaults.set(newValue.rawValue, forKey: Keys.keySort) }
+        get { store.linkKeySort }
+        nonmutating set { store.linkKeySort = newValue }
     }
 }
 
@@ -124,9 +116,9 @@ final class LinkModel {
     /// Where a refusal is shown (the app's status notice).
     @ObservationIgnored var notify: (String) -> Void = { _ in }
 
-    init(backend: any BackendProtocol, defaults: UserDefaults) {
+    init(backend: any BackendProtocol, defaults: UserDefaults, store: PreferencesStore? = nil) {
         self.backend = backend
-        prefs = LinkPrefs(defaults: defaults)
+        prefs = LinkPrefs(store: store ?? PreferencesStore(defaults: defaults))
         interface = prefs.interface
         autoJoin = prefs.autoJoin
         keySort = prefs.keySort

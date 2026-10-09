@@ -451,7 +451,7 @@ struct PhraseSpan: Equatable, Sendable {
 /// What a key means to a deck: A as typed, B with Shift. The Player group of
 /// `src/lib/shortcuts.ts`: cue writes (1 to 3 set, Command-1 to 3 clear, M store, X delete) and
 /// the grid shift keys (Command-arrows) go through the core's write gate.
-enum PlayerKeyAction: Equatable, Sendable {
+enum PlayerKeyAction: Equatable, Hashable, Sendable {
     case togglePlay
     case cueDown, cueUp
     case quantize
@@ -474,10 +474,13 @@ enum PlayerKeyAction: Equatable, Sendable {
     /// F1: BEAT SYNC (the two-deck layout).
     case beatSync
     case metronomeSound
+    /// A mixer kill button (unbound until the Keyboard pane gives it a key).
+    case kill(MixerBand)
     /// Consumed with no effect: an auto-repeat of a one-shot key, or a key whose action needs a write.
     case swallow
 }
 
+/// An event's key, as the monitor reads it.
 struct KeyChord: Equatable, Sendable {
     /// `charactersIgnoringModifiers`, lower-cased, for printable keys; empty for special ones.
     var character: String
@@ -485,6 +488,15 @@ struct KeyChord: Equatable, Sendable {
     var modifiers: NSEvent.ModifierFlags
 }
 
+/// What a key press does, once the binding table has been asked.
+enum KeyEffect: Equatable, Sendable {
+    case deck(Deck, PlayerKeyAction)
+    case master(MasterKey)
+}
+
+/// The decks' and the master's keys: the part of the binding table the one key monitor owns. The
+/// chords are in `BindingTable` (with the person's overrides); this adds the rules around them:
+/// an idle deck, auto-repeat, key-up, and text fields.
 enum PlayerKeymap {
     // Virtual key codes of the keys with no stable character.
     static let space: UInt16 = 49
@@ -493,97 +505,51 @@ enum PlayerKeymap {
     static let f1: UInt16 = 122, f2: UInt16 = 120, f3: UInt16 = 99, f6: UInt16 = 97, f7: UInt16 = 98
     static let f9: UInt16 = 101, f10: UInt16 = 109, f11: UInt16 = 103, f12: UInt16 = 111
 
-    private static let memoryKeys = ["a", "s", "d", "f", "g", "h", "j", "k", "l", ";"]
-
-    /// Characters Shift turns the number row and a few others into (US layout), back to the key.
-    private static let unshifted: [String: String] = [
-        "!": "1", "@": "2", "#": "3", "$": "4", "%": "5", "^": "6", "&": "7", "*": "8", "(": "9", "?": "/", "_": "-",
-        "+": "=", ":": ";",
-    ]
-
-    /// Which deck a chord is for and the chord as deck A would see it: Shift alone is deck B, in
-    /// the two-deck layout only (elsewhere B has no keys). Nil for a Shift chord that has no
-    /// deck to go to; anything else is deck A's. A key lifted after Shift was released is still
-    /// A's, which is why `PlayerModel` remembers where CUE and a pad went down.
-    static func route(_ chord: KeyChord, twoDecks: Bool) -> (deck: Deck, chord: KeyChord)? {
-        let mods = chord.modifiers.intersection([.command, .control, .option, .shift])
-        guard mods.contains(.shift) else { return (.a, chord) }
-        guard mods == .shift, twoDecks else { return nil }
-        var plain = chord
-        plain.modifiers = []
-        plain.character = unshifted[chord.character] ?? chord.character
-        return (.b, plain)
+    /// What a held key repeats: stepping keys. Every other key is a one-shot.
+    private static func repeats(_ action: PlayerKeyAction) -> Bool {
+        switch action {
+        case .jump, .tempoReset, .bpmUp, .bpmDown, .gridShift, .memoryPrevious, .memoryNext: true
+        default: false
+        }
     }
 
-    /// What `chord` does, or nil to pass it on. `loaded` is whether deck A has a track: an idle
-    /// deck ignores everything but Space and C. `typing` means a text field has focus.
-    static func action(
-        for chord: KeyChord, isUp: Bool, isRepeat: Bool, typing: Bool, loaded: Bool
-    ) -> PlayerKeyAction? {
-        let mods = chord.modifiers.intersection([.command, .control, .option, .shift])
-        let c = chord.character
-
-        // Releasing CUE or a pad is honoured whatever has the focus now.
-        if isUp {
-            if mods.isEmpty, c == "c" { return .cueUp }
-            if mods.isEmpty, ["1", "2", "3"].contains(c) { return .hotCueUp }
-            if mods.isEmpty, chord.keyCode == space { return typing ? nil : .swallow }
-            if typing || !loaded { return nil }
-            return isHandled(chord, mods: mods) ? .swallow : nil
+    /// An idle deck still answers Space, CUE and the metronome's sound key.
+    private static func worksIdle(_ action: PlayerKeyAction) -> Bool {
+        switch action {
+        case .togglePlay, .cueDown, .metronomeSound: true
+        default: false
         }
-        if typing { return nil }
+    }
 
-        // Option+\ doubles the loop; every other chord with a modifier is the menus'.
-        if mods == .option, c == "\\" { return loaded ? (isRepeat ? .swallow : .loopDouble) : nil }
-        // Grid and hot cue clears are Command chords.
-        if mods == .command, loaded {
-            if ["1", "2", "3"].contains(c) { return isRepeat ? .swallow : .hotCueClear(["A", "B", "C"][Int(c)! - 1]) }
-            if chord.keyCode == left { return .gridShift(-1) }
-            if chord.keyCode == right { return .gridShift(1) }
-        }
-        if mods == [.command, .option], c == "\\", loaded { return isRepeat ? .swallow : .gridAlign }
-        guard mods.isEmpty else { return nil }
-
-        switch chord.keyCode {
-        case space: return isRepeat ? .swallow : .togglePlay
-        case left: return loaded ? .jump(-1) : nil
-        case right: return loaded ? .jump(1) : nil
-        case f1: return loaded ? (isRepeat ? .swallow : .beatSync) : nil
-        case f2: return loaded ? (isRepeat ? .swallow : .masterTempo) : nil
-        case f3: return loaded ? .tempoReset : nil
-        case f6: return loaded ? .bpmDown : nil
-        case f7: return loaded ? .bpmUp : nil
-        case f9: return isRepeat ? .swallow : .metronomeSound
-        default: break
-        }
-        if c == "c" { return isRepeat ? .swallow : .cueDown }
-        guard loaded else { return nil }
-        if isRepeat, !["b", "n"].contains(c) { return .swallow }
-        switch c {
-        case "=", "+": return .zoom(-1)
-        case "-": return .zoom(1)
-        case "q": return .quantize
-        case "b": return .memoryPrevious
-        case "n": return .memoryNext
-        case "m": return .memoryStore
-        case "x": return .memoryDelete
-        case "i": return .loopIn
-        case "o": return .loopOut
-        case "r": return .reloop
-        case "/": return .loopHalve
-        case "1", "2", "3": return .hotCueDown(["A", "B", "C"][Int(c)! - 1])
-        case "4", "5", "6", "7", "8", "9": return LoopLength.beats(forDigit: Int(c)!).map { .beatLoop($0) }
+    /// What `chord` does, or nil to pass it on. `loaded` says whether a deck has a track;
+    /// `typing` means a text field has focus; deck B's keys do nothing outside the two-deck layout.
+    static func resolve(
+        _ chord: KeyChord, isUp: Bool, isRepeat: Bool, typing: Bool, loaded: (Deck) -> Bool, twoDecks: Bool,
+        keymap: Keymap = Keymap()
+    ) -> KeyEffect? {
+        let c = Chord(chord)
+        guard let binding = keymap.binding(for: c, owner: .deck) else { return nil }
+        let plain = !c.command && !c.option && !c.control
+        switch binding.command {
+        case .master(let key):
+            return isUp || typing ? nil : .master(key)
+        case .player(let deck, let action):
+            if deck == .b && !twoDecks { return nil }
+            if isUp {
+                // Releasing CUE or a pad is honoured whatever has the focus now.
+                switch action {
+                case .cueDown: return .deck(deck, .cueUp)
+                case .hotCueDown: return .deck(deck, .hotCueUp)
+                case .togglePlay: return typing ? nil : .deck(deck, .swallow)
+                default: return typing || !loaded(deck) || !plain ? nil : .deck(deck, .swallow)
+                }
+            }
+            if typing { return nil }
+            if !loaded(deck) && !worksIdle(action) { return nil }
+            if isRepeat && !repeats(action) { return .deck(deck, .swallow) }
+            return .deck(deck, action)
         default:
-            if let n = memoryKeys.firstIndex(of: c) { return .memoryNumber(n + 1) }
             return nil
         }
-    }
-
-    /// Whether a key-up of this chord belongs to a key the player consumed on the way down.
-    private static func isHandled(_ chord: KeyChord, mods: NSEvent.ModifierFlags) -> Bool {
-        guard mods.isEmpty else { return false }
-        let c = chord.character
-        return ["q", "b", "n", "m", "x", "i", "o", "r", "/", "=", "+", "-", "4", "5", "6", "7", "8", "9"].contains(c)
-            || memoryKeys.contains(c) || [left, right, f1, f2, f3, f6, f7, f9].contains(chord.keyCode)
     }
 }

@@ -1,66 +1,6 @@
 import SwiftUI
 
-/// The Settings window. Phase 6 adds the other panes; so far General (Library Protection), Audio and LINK.
-struct SettingsView: View {
-    let player: PlayerModel
-    let model: AppModel
-    /// `RBXPORT_SETTINGS_TAB=general|audio|link` opens a tab, for screenshots.
-    @State private var tab = ProcessInfo.processInfo.environment["RBXPORT_SETTINGS_TAB"] ?? "general"
-
-    var body: some View {
-        TabView(selection: $tab) {
-            GeneralPane(model: model)
-                .tabItem { Label("General", systemImage: "gearshape") }
-                .tag("general")
-            AudioPane(player: player)
-                .tabItem { Label("Audio", systemImage: "speaker.wave.2") }
-                .tag("audio")
-            LinkPane(model: model.link)
-                .tabItem { Label("LINK", systemImage: "link") }
-                .tag("link")
-        }
-        .frame(width: 520)
-        .scenePadding()
-    }
-}
-
-/// Library Protection: the one setting the editing gate reads.
-struct GeneralPane: View {
-    let model: AppModel
-    @State private var confirmingUnlock = false
-
-    var body: some View {
-        Form {
-            Section("Library") {
-                Toggle(
-                    "Protect library",
-                    isOn: Binding(
-                        get: { model.protectLibrary },
-                        set: { on in
-                            if on { model.protectLibrary = true } else { confirmingUnlock = true }
-                        })
-                )
-                Text(
-                    "While on, rbxport will not change your rekordbox library: no playlists, tags or ratings are written, and undo is off. Turn it off to edit. rekordbox must be closed while you edit."
-                )
-                .font(.caption).foregroundStyle(.secondary)
-                if model.isReadOnly && !model.protectLibrary {
-                    Text("Editing is still locked while rekordbox is running. Quit rekordbox to enable editing.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }
-        }
-        .formStyle(.grouped)
-        .confirmationDialog("Turn off Library Protection?", isPresented: $confirmingUnlock) {
-            Button("Turn Off Protection", role: .destructive) { model.protectLibrary = false }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Edits are written to your rekordbox library. Make a backup first if you have not.")
-        }
-    }
-}
-
-/// Output device, sample rate, buffer size and the master limiter (`AudioPane.tsx`).
+/// Output device, sample rate, buffer size, the metronome's click and the master limiter (`AudioPane.tsx`).
 struct AudioPane: View {
     let player: PlayerModel
 
@@ -94,6 +34,14 @@ struct AudioPane: View {
                 }
                 Text("A change takes effect at once: the loaded tracks are reloaded where they were.")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Metronome") {
+                Picker(
+                    "Click sound",
+                    selection: Binding(get: { player.prefs.metronomeSound }, set: { player.prefs.metronomeSound = $0 })
+                ) {
+                    ForEach(1...3, id: \.self) { Text("Click Sound 0\($0)").tag($0) }
+                }
             }
             LimiterSection(player: player)
         }

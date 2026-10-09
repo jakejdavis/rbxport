@@ -116,9 +116,11 @@ struct PlayerLogicTests {
 
     @Test func keyBindingsAreSpaceAndHeldC() {
         func action(_ code: UInt16, _ char: String = "", up: Bool = false, repeating: Bool = false, typing: Bool = false, mods: NSEvent.ModifierFlags = [], loaded: Bool = true) -> PlayerKeyAction? {
-            PlayerKeymap.action(
-                for: KeyChord(character: char, keyCode: code, modifiers: mods), isUp: up, isRepeat: repeating,
-                typing: typing, loaded: loaded)
+            let effect = PlayerKeymap.resolve(
+                KeyChord(character: char, keyCode: code, modifiers: mods), isUp: up, isRepeat: repeating,
+                typing: typing, loaded: { _ in loaded }, twoDecks: false)
+            if case .deck(.a, let action)? = effect { return action }
+            return nil
         }
         #expect(action(49, " ") == .togglePlay)
         #expect(action(49, " ", repeating: true) == .swallow)

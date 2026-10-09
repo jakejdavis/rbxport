@@ -96,6 +96,8 @@ final class PlayerModel {
 
     @ObservationIgnored private let backend: any BackendProtocol
     @ObservationIgnored private let defaults: UserDefaults
+    /// Settings: the metronome sound, quantize, sync and the keys.
+    let prefs: PreferencesStore
     @ObservationIgnored private var pump: Task<Void, Never>?
     @ObservationIgnored private var keyMonitor: Any?
     @ObservationIgnored private var resignObserver: NSObjectProtocol?
@@ -112,16 +114,18 @@ final class PlayerModel {
 
     init(
         backend: any BackendProtocol, waveforms: WaveformService, artwork: ArtworkService, defaults: UserDefaults,
-        now: @escaping () -> TimeInterval = CACurrentMediaTime
+        prefs: PreferencesStore? = nil, now: @escaping () -> TimeInterval = CACurrentMediaTime
     ) {
         self.backend = backend
         self.defaults = defaults
+        let prefs = prefs ?? PreferencesStore(defaults: defaults)
+        self.prefs = prefs
         self.now = now
         playback = backend.playback
         decks = [Deck.a, Deck.b].map {
             DeckModel(
                 deck: $0, playback: backend.playback, waveforms: waveforms, artworks: artwork, backend: backend,
-                defaults: defaults, now: now)
+                defaults: defaults, prefs: prefs, now: now)
         }
         preview = PreviewModel(playback: backend.playback, now: now)
         // The stored layout; before layouts, "Show Player" off was the full browser.
@@ -139,13 +143,18 @@ final class PlayerModel {
         panelHeight = min(max(defaults.object(forKey: "player.height") as? Double ?? 360, Self.panelHeightRange.lowerBound), Self.panelHeightRange.upperBound)
         dualPanelHeight = min(max(defaults.object(forKey: "player.dualHeight") as? Double ?? 480, Self.dualPanelHeightRange.lowerBound), Self.dualPanelHeightRange.upperBound)
         dualControl = defaults.object(forKey: "player.dualControl") as? Bool ?? false
-        metronomeSound = min(max(defaults.object(forKey: "player.metronomeSound") as? Int ?? 2, 1), 3)
+        metronomeSound = prefs.metronomeSound
         // Read the engine's mixer back; push the remembered master level, limiter and output
         // settings. None of this opens the audio output.
         mixer = MixerModel(playback: backend.playback)
         master = MasterModel(playback: backend.playback, defaults: defaults)
         limiter = LimiterModel(playback: backend.playback, defaults: defaults)
-        audio = AudioSettingsModel(playback: backend.playback, defaults: defaults)
+        audio = AudioSettingsModel(playback: backend.playback, defaults: defaults, prefs: prefs)
+        prefs.onChange { [weak self] key in
+            guard let self, key == PrefKeys.metronomeSound, self.metronomeSound != self.prefs.metronomeSound else { return }
+            self.metronomeSound = self.prefs.metronomeSound
+            self.playback.setMetronomeSound(UInt8(self.metronomeSound))
+        }
         wireDecks()
     }
 
@@ -309,7 +318,7 @@ final class PlayerModel {
 
     /// The metronome click, 1 to 3; F9 cycles 2, 3, 1. Remembered across launches.
     private(set) var metronomeSound: Int {
-        didSet { defaults.set(metronomeSound, forKey: "player.metronomeSound") }
+        didSet { prefs.metronomeSound = metronomeSound }
     }
 
     func cycleMetronomeSound() {
@@ -353,6 +362,7 @@ final class PlayerModel {
         case .bpmDown: d.nudgeTempo(steps: -1)
         case .beatSync: beatSync(which)
         case .metronomeSound: cycleMetronomeSound()
+        case .kill(let band): mixer.toggleKill(which, band)
         case .swallow: break
         }
     }
@@ -377,7 +387,8 @@ final class PlayerModel {
         let leader = deck(syncMaster)
         guard follower.isLoaded, leader.track != nil else { return }
         let state = follower.syncState()
-        let (tempo, nudge) = SyncLogic.syncTo(leader: leader.syncState(), follower: state)
+        let (tempo, nudge) = SyncLogic.syncTo(
+            leader: leader.syncState(), follower: state, matchBeat: prefs.syncType == .beat, doubleHalf: prefs.syncDoubleHalf)
         follower.setTempo(tempo, bySync: true)
         // The nudge is measured against where the follower is now; the tempo does not move it.
         if abs(nudge) > 0.001 { follower.seek(toSeconds: state.position + nudge) }
@@ -394,7 +405,7 @@ final class PlayerModel {
             let fileBpm = Double(follower.track?.bpmX100 ?? 0)
             guard fileBpm > 0 else { continue }
             let tempo = SyncLogic.tempoFor(
-                leader: SyncDeck(bpmX100: leaderBpm), follower: SyncDeck(bpmX100: fileBpm))
+                leader: SyncDeck(bpmX100: leaderBpm), follower: SyncDeck(bpmX100: fileBpm), doubleHalf: prefs.syncDoubleHalf)
             if abs(tempo - follower.tempo) > 1e-4 { follower.setTempo(tempo, bySync: true) }
         }
     }
@@ -405,7 +416,7 @@ final class PlayerModel {
     /// lined up with it and started at once. Anything else simply toggles.
     func togglePlay(_ which: Deck) {
         let d = deck(which)
-        if layout.deckCount == 2, d.isLoaded, !d.isPlaying, d.synced, d.quantize, which != syncMaster {
+        if layout.deckCount == 2, prefs.syncType == .beat, d.isLoaded, !d.isPlaying, d.synced, d.quantize, which != syncMaster {
             let leader = deck(syncMaster).syncState()
             let follower = d.syncState()
             if leader.playing, let wait = SyncLogic.beatWait(leader: leader), !d.beats.isEmpty {
@@ -458,6 +469,11 @@ final class PlayerModel {
     }
 
     private func handleKey(_ event: NSEvent) -> Bool {
+        // The Settings and Sync Manager windows have no decks: their keys are their own (and the
+        // Keyboard pane listens to them).
+        if let title = event.window?.title, title == "Sync Manager" || SettingsTab.allCases.contains(where: { $0.title == title }) {
+            return false
+        }
         let responder = event.window?.firstResponder
         let typing = responder is NSTextView || responder is NSTextField
         // The sidebar's outline uses left and right to fold its folders.
@@ -467,16 +483,38 @@ final class PlayerModel {
         let raw = KeyChord(
             character: event.charactersIgnoringModifiers?.lowercased() ?? "", keyCode: event.keyCode,
             modifiers: event.modifierFlags)
-        // Shift is deck B, in the two-deck layout only.
-        guard let (which, chord) = PlayerKeymap.route(raw, twoDecks: layout.deckCount == 2) else { return false }
         guard
-            let action = PlayerKeymap.action(
-                for: chord, isUp: event.type == .keyUp, isRepeat: event.type == .keyDown && event.isARepeat,
-                typing: typing, loaded: deck(which).isLoaded),
-            // Deck B has no metronome-sound key (F9) of its own.
-            !(which == .b && action == .metronomeSound)
+            let effect = PlayerKeymap.resolve(
+                raw, isUp: event.type == .keyUp, isRepeat: event.type == .keyDown && event.isARepeat,
+                typing: typing, loaded: { self.deck($0).isLoaded }, twoDecks: layout.deckCount == 2,
+                keymap: prefs.keymap)
         else { return false }
-        perform(action, on: which)
+        switch effect {
+        case .deck(let which, let action): perform(action, on: which)
+        case .master(let key): performMaster(key)
+        }
         return true
     }
+
+    /// The master level keys: a half step of the knob either way, and mute (which remembers the level).
+    func performMaster(_ key: MasterKey) {
+        switch key {
+        case .volumeUp: setMasterReading(master.reading + 0.5)
+        case .volumeDown: setMasterReading(master.reading - 0.5)
+        case .mute:
+            if let back = mutedFrom {
+                mutedFrom = nil
+                master.setReading(back)
+            } else if master.reading > 0 {
+                mutedFrom = master.reading
+                master.setReading(0)
+            }
+        }
+    }
+
+    private func setMasterReading(_ reading: Double) {
+        mutedFrom = nil
+        master.setReading(reading)
+    }
+    @ObservationIgnored private var mutedFrom: Double?
 }

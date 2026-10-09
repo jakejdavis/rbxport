@@ -35,14 +35,18 @@ final class AnalysisQueue {
         didSet {
             let clamped = min(max(slots, 1), 4)
             if clamped != slots { slots = clamped; return }
-            if slots != oldValue { defaults.set(slots, forKey: "analysis.slots") }
+            if slots != oldValue { prefs.concurrentTracks = slots }
             pump()
         }
     }
 
     /// Settings are taken when a batch is queued; a later change does not alter it.
     @ObservationIgnored var settings = AnalysisSettings(bpmGrid: true, key: true, highPrecision: true, minBpm: 70, maxBpm: 180)
-    @ObservationIgnored var rekordboxMode = false
+    /// Analysis › Analysis mode: rekordbox's settings instead of rbxport's.
+    var rekordboxMode: Bool {
+        get { prefs.analysisMode == .rekordbox }
+        set { prefs.analysisMode = newValue ? .rekordbox : .rbxport }
+    }
     /// Called for each track that finished.
     @ObservationIgnored var onAnalysed: ((AnalysisResult) -> Void)?
     /// Called once when a run is over, however it ended: the app reloads the library then.
@@ -50,14 +54,19 @@ final class AnalysisQueue {
 
     @ObservationIgnored private let backend: any BackendProtocol
     @ObservationIgnored private let defaults: UserDefaults
+    let prefs: PreferencesStore
     @ObservationIgnored private var tasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var runSettings: [String: (AnalysisSettings, Bool)] = [:]
 
-    init(backend: any BackendProtocol, defaults: UserDefaults) {
+    init(backend: any BackendProtocol, defaults: UserDefaults, prefs: PreferencesStore? = nil) {
         self.backend = backend
         self.defaults = defaults
-        let stored = defaults.object(forKey: "analysis.slots") as? Int ?? Self.defaultSlots
-        slots = min(max(stored, 1), 4)
+        let prefs = prefs ?? PreferencesStore(defaults: defaults)
+        self.prefs = prefs
+        slots = min(max(prefs.concurrentTracks, 1), 4)
+        prefs.onChange { [weak self] key in
+            if key == PrefKeys.concurrentTracks, let self, self.slots != prefs.concurrentTracks { self.slots = prefs.concurrentTracks }
+        }
     }
 
     var isActive: Bool { !pending.isEmpty || !running.isEmpty }

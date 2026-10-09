@@ -55,14 +55,14 @@ struct ContentView: View {
                     Menu {
                         Picker("Layout", selection: Binding(get: { model.player.layout }, set: { model.player.layout = $0 })) {
                             ForEach(PlayerLayout.allCases) { layout in
-                                Text("\(layout.label)  \u{2318}\(String(layout.keyEquivalent))").tag(layout)
+                                Text("\(layout.label)  \(model.prefs.keymap.chord(for: layout.bindingID).display)").tag(layout)
                             }
                         }
                         .pickerStyle(.inline)
                     } label: {
                         Label("Layout", systemImage: "rectangle.split.1x2")
                     }
-                    .help("Choose how many players are shown (\u{2318}7 to \u{2318}0)")
+                    .help("Choose how many players are shown")
                 }
                 ToolbarItem(placement: .primaryAction) {
                     MasterLevelControl(master: model.player.master)

@@ -37,106 +37,14 @@ struct RbxportApp: App {
                 }
         }
         .defaultSize(width: 1280, height: 900)
-        .commands {
-            CommandGroup(replacing: .undoRedo) {
-                Button(model.undoMenuTitle) { model.performHistoryCommand(redo: false) }
-                    .keyboardShortcut("z", modifiers: .command)
-                    .disabled(!model.canUndo && !(NSApp.keyWindow?.firstResponder is NSTextView))
-                Button(model.redoMenuTitle) { model.performHistoryCommand(redo: true) }
-                    .keyboardShortcut("z", modifiers: [.command, .shift])
-                    .disabled(!model.canRedo && !(NSApp.keyWindow?.firstResponder is NSTextView))
-            }
-            CommandGroup(after: .newItem) {
-                Button("New Playlist") { Task { await model.createPlaylist(near: model.selectedSidebarNode) } }
-                    .keyboardShortcut("n", modifiers: [.command, .option])
-                    .disabled(!model.canEdit)
-                Button("New Folder") { Task { await model.createFolder(near: model.selectedSidebarNode) } }
-                    .keyboardShortcut("n", modifiers: [.command, .option, .shift])
-                    .disabled(!model.canEdit)
-                Button("New Intelligent Playlist") { model.newSmartPlaylist(near: model.selectedSidebarNode) }
-                    .disabled(!model.canEdit)
-            }
-            CommandGroup(after: .importExport) {
-                Button("Sync Manager\u{2026}") { model.openSyncManager() }
-                    .keyboardShortcut("y", modifiers: [.command, .shift])
-                Menu("Import") {
-                    Button("Track\u{2026}") { Task { await model.importFromPanel(folders: false) } }
-                        .disabled(!model.canEdit)
-                    Button("Folder\u{2026}") { Task { await model.importFromPanel(folders: true) } }
-                        .disabled(!model.canEdit)
-                    Button("rekordbox XML\u{2026}") { Task { await model.importXMLFromPanel() } }
-                        .disabled(!model.canEdit)
-                    // Browsing the Music library writes nothing; only its Import button needs editing.
-                    Button("iTunes Library XML\u{2026}") { Task { await model.openItunesFromPanel() } }
-                    Button("USB Device\u{2026}") { model.openUsbImportFromMenu() }
-                        .disabled(model.devices.devices.isEmpty)
-                }
-                Button("Analyze Track(s)") { model.analyseSelection() }
-                    .keyboardShortcut("a", modifiers: [.command, .shift])
-                    .disabled(!model.canEdit || model.selectedIDs.isEmpty)
-                Button("Missing File Manager\u{2026}") { model.openMissingFiles() }
-                Button("Find Duplicates\u{2026}") { model.openDuplicates() }
-            }
-            CommandGroup(after: .textEditing) {
-                Button("Find") { model.focusSearch() }.keyboardShortcut("f", modifiers: .command)
-            }
-            CommandGroup(after: .sidebar) {
-                Menu("Layout") {
-                    ForEach(PlayerLayout.allCases) { layout in
-                        Toggle(
-                            layout.label,
-                            isOn: Binding(
-                                get: { model.player.layout == layout }, set: { if $0 { model.player.layout = layout } })
-                        )
-                        .keyboardShortcut(KeyEquivalent(layout.keyEquivalent), modifiers: .command)
-                    }
-                }
-                Picker(
-                    "Key Display",
-                    selection: Binding(get: { model.keyStyle }, set: { model.keyStyle = $0 })
-                ) {
-                    ForEach(KeyStyle.allCases, id: \.self) { Text($0.label).tag($0) }
-                }
-                Picker(
-                    "Waveform Color",
-                    selection: Binding(get: { model.waveformPalette }, set: { model.waveformPalette = $0 })
-                ) {
-                    ForEach(WaveformPalette.allCases, id: \.self) { Text($0.label).tag($0) }
-                }
-                Picker(
-                    "Row Size",
-                    selection: Binding(get: { model.rowSize }, set: { model.rowSize = $0 })
-                ) {
-                    ForEach(RowSize.allCases, id: \.self) { Text($0.label).tag($0) }
-                }
-                Button("Reset Columns") { model.resetColumns() }
-                Toggle(
-                    "Show Track Filter",
-                    isOn: Binding(get: { model.filterBarOpen }, set: { model.filterBarOpen = $0 })
-                )
-                .keyboardShortcut("f", modifiers: [.command, .option])
-                Toggle(
-                    "Show Player",
-                    isOn: Binding(get: { model.player.panelOpen }, set: { model.player.panelOpen = $0 })
-                )
-                .keyboardShortcut("p", modifiers: [.command, .option])
-                Toggle(
-                    "Show Information",
-                    isOn: Binding(get: { model.infoPanelOpen }, set: { model.infoPanelOpen = $0 })
-                )
-                .keyboardShortcut("i", modifiers: .command)
-                Toggle(
-                    "Show Playlist Counts",
-                    isOn: Binding(get: { model.sidebar.showChildCounts }, set: { model.sidebar.showChildCounts = $0 }))
-            }
-        }
+        .commands { AppCommands(model: model) }
         Window("Sync Manager", id: SyncManagerScene.id) {
             SyncManagerView(model: model.syncManager, devices: model.devices, jobs: model.exportJobs)
                 .environment(model)
         }
         .defaultSize(width: 900, height: 560)
         Settings {
-            SettingsView(player: model.player, model: model)
+            SettingsView(model: model)
         }
     }
 

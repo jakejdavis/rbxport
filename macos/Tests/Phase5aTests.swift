@@ -95,7 +95,7 @@ struct DeviceRulesTests {
         prefs.conversionFormat = .mp3
         let options = DeviceExportPrefs(defaults: defaults).options(ejectAfterSync: true)
         #expect(options.deleteUnlistedMusic && options.compatibility == .mp3 && options.ejectAfterSync)
-        defaults.set("rgb", forKey: "djSystem.waveformColor")
+        prefs.store.djWaveformColor = .rgb
         #expect(prefs.stickDefaults.waveformColor == .rgb)
     }
 
