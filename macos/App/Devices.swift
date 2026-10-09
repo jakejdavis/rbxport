@@ -18,6 +18,23 @@ struct DeviceExportPrefs {
         static let waveformPosition = "djSystem.waveformPosition"
         static let overviewWaveform = "djSystem.overviewWaveform"
         static let keyDisplay = "djSystem.keyDisplay"
+        static let importCues = "usbExport.importButtonCues"
+        static let importHistory = "usbExport.importButtonHistory"
+        static let importSettings = "usbExport.importButtonSettings"
+    }
+
+    /// The ticks the Import from USB sheet opens with (the React names; cues and history on, settings off).
+    var importButtonCues: Bool {
+        get { (defaults.object(forKey: Keys.importCues) as? Bool) ?? true }
+        nonmutating set { defaults.set(newValue, forKey: Keys.importCues) }
+    }
+    var importButtonHistory: Bool {
+        get { (defaults.object(forKey: Keys.importHistory) as? Bool) ?? true }
+        nonmutating set { defaults.set(newValue, forKey: Keys.importHistory) }
+    }
+    var importButtonSettings: Bool {
+        get { (defaults.object(forKey: Keys.importSettings) as? Bool) ?? false }
+        nonmutating set { defaults.set(newValue, forKey: Keys.importSettings) }
     }
 
     /// Cuts a stick down to the selection, removing unlisted music. Off by default.
@@ -411,6 +428,8 @@ extension AppModel {
             Task { await exportPlaylist(id: playlist, to: path) }
         case .ejectDevice:
             if let path = node.path { Task { await eject(path: path) } }
+        case .importFromDevice:
+            if let path = node.path { openUsbImport(path: path) }
         case .openSyncManager:
             openSyncManager()
         default: break

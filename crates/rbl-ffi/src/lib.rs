@@ -23,8 +23,8 @@ mod types;
 pub use crate::core::Core;
 pub use devices::{
     ColorName, CompatibilityFormat, DeviceLibraryTree, DevicePlaylistNode, DeviceSettings, DeviceSyncState, ExportOptions, ExportProgress,
-    ExportReport, ExportState, KeyDisplay, MenuSlot, MissingExportFile, StickOverview, StickDefaults, SyncDeviceReport, SyncPlaylist,
-    SyncProgress, SyncState, VerifyReport, WaveformColor, WaveformPosition,
+    ExportReport, ExportState, ItunesLibrary, ItunesNode, ItunesTrack, KeyDisplay, MenuSlot, MissingExportFile, StickOverview, StickDefaults, SyncDeviceReport, SyncPlaylist,
+    SyncProgress, SyncState, UsbImportReport, VerifyReport, WaveformColor, WaveformPosition,
 };
 pub use error::FfiError;
 pub use events::{EventListener, LibraryEvent};

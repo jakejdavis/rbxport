@@ -41,6 +41,9 @@ struct ContentView: View {
             .sheet(item: $model.duplicates) { duplicates in
                 DuplicatesSheet(model: duplicates, editable: model.canEdit, close: { model.duplicates = nil })
             }
+            .sheet(item: $model.usbImport) { usbImport in
+                UsbImportSheet(model: usbImport)
+            }
             .toolbar {
                 ToolbarItem(placement: .navigation) {
                     Toggle(isOn: Binding(get: { model.filterBarOpen }, set: { model.filterBarOpen = $0 })) {
@@ -120,25 +123,31 @@ struct DetailView: View {
                 PanelDivider(player: model.player)
             }
             VStack(spacing: 0) {
-                if let device = model.selectedDevice, let panel = model.devicePanel {
-                    // A device is selected: its settings take the place of the track table.
-                    DevicePanelView(
-                        device: device, model: panel, playlists: model.sidebar.playlistTargets(),
-                        exportPlaylist: { id in Task { await model.exportPlaylist(id: id, to: device.path) } },
-                        busy: model.exportJobs.isActive(path: device.path))
-                } else if model.filterBarOpen {
-                    FilterBar(model: model)
-                    Divider()
-                }
-                if model.selectedDevice != nil && model.devicePanel != nil {
-                    EmptyView()
-                } else if let opened = model.opened {
-                    TrackTable(
-                        model: model, opened: opened, layout: model.layout, keyStyle: model.keyStyle,
-                        sortKey: model.sortKey, descending: model.descending,
-                        palette: model.waveformPalette, rowHeight: model.rowHeight)
+                if model.isItunesSelected {
+                    // The Music library: a read-only browser takes the place of the track table.
+                    ItunesPanelView(model: model.itunes, canEdit: model.canEdit, lockedReason: model.itunesLockedReason)
                 } else {
-                    Spacer()
+                    if let device = model.selectedDevice, let panel = model.devicePanel {
+                        // A device is selected: its settings take the place of the track table.
+                        DevicePanelView(
+                            device: device, model: panel, playlists: model.sidebar.playlistTargets(),
+                            exportPlaylist: { id in Task { await model.exportPlaylist(id: id, to: device.path) } },
+                            importFromDevice: { model.openUsbImport(path: device.path) },
+                            busy: model.exportJobs.isActive(path: device.path))
+                    } else if model.filterBarOpen {
+                        FilterBar(model: model)
+                        Divider()
+                    }
+                    if model.selectedDevice != nil && model.devicePanel != nil {
+                        EmptyView()
+                    } else if let opened = model.opened {
+                        TrackTable(
+                            model: model, opened: opened, layout: model.layout, keyStyle: model.keyStyle,
+                            sortKey: model.sortKey, descending: model.descending,
+                            palette: model.waveformPalette, rowHeight: model.rowHeight)
+                    } else {
+                        Spacer()
+                    }
                 }
                 Divider()
                 StatusLine()

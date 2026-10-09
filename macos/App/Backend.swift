@@ -138,6 +138,19 @@ protocol BackendProtocol: Sendable {
     func cancelExport(path: String) async
     /// Every export's latest progress, for a UI that starts late.
     func exportProgress() async -> [ExportProgress]
+
+    // MARK: Phase 5b: import from a stick, and the iTunes / Music library.
+
+    /// Brings cues and grids, play history and/or settings from a stick into the library. Cues and
+    /// history are behind the write gate (`FfiError.ReadOnly`); raises `.importProgress`.
+    func importUSB(path: String, cues: Bool, history: Bool, settings: Bool) async throws -> UsbImportReport
+    /// The Music library at its usual place; nil when there is none (always nil for a fixture library).
+    func itunesDefaultLibrary() async throws -> ItunesLibrary?
+    /// Reads the XML at `path`. Read-only.
+    func itunesLibrary(at path: String) async throws -> ItunesLibrary
+    func itunesPlaylistTracks(path: String, nodeID: String) async throws -> [ItunesTrack]
+    /// Imports the playlists (`itunes:<index>`), the folders above them and their tracks. Behind the write gate.
+    func importItunesSelected(path: String, ids: [String]) async throws -> XmlImportReport
 }
 
 /// Forwards the Rust core's callbacks into an `AsyncStream`.
@@ -384,6 +397,27 @@ actor Backend: BackendProtocol {
     }
     func cancelExport(path: String) async { core.cancelExport(path: path) }
     func exportProgress() async -> [ExportProgress] { core.exportProgress() }
+
+    func importUSB(path: String, cues: Bool, history: Bool, settings: Bool) async throws -> UsbImportReport {
+        let core = core
+        return try await Task.detached { try core.importUsb(path: path, cues: cues, history: history, settings: settings) }.value
+    }
+    func itunesDefaultLibrary() async throws -> ItunesLibrary? {
+        let core = core
+        return try await Task.detached { try core.itunesDefaultLibrary() }.value
+    }
+    func itunesLibrary(at path: String) async throws -> ItunesLibrary {
+        let core = core
+        return try await Task.detached { try core.itunesLibraryAt(path: path) }.value
+    }
+    func itunesPlaylistTracks(path: String, nodeID: String) async throws -> [ItunesTrack] {
+        let core = core
+        return try await Task.detached { try core.itunesPlaylistTracks(path: path, nodeId: nodeID) }.value
+    }
+    func importItunesSelected(path: String, ids: [String]) async throws -> XmlImportReport {
+        let core = core
+        return try await Task.detached { try core.importItunesSelected(path: path, ids: ids) }.value
+    }
 }
 
 func describe(_ error: Error) -> String {

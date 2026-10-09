@@ -4251,6 +4251,7 @@ dependencies = [
 name = "rbl-ffi"
 version = "1.2.0"
 dependencies = [
+ "dirs 5.0.1",
  "rbl-anlz",
  "rbl-app",
  "rbl-db",

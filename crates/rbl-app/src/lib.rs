@@ -36,6 +36,8 @@ pub mod state;
 pub mod tempo;
 pub mod track_edits;
 pub mod import;
+pub mod usb_import;
+pub mod itunes;
 pub mod maintenance;
 #[cfg(test)]
 mod test_support;

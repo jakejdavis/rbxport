@@ -417,3 +417,78 @@ impl From<VerifyReportDto> for VerifyReport {
         Self { tracks: v.tracks, playlists: v.playlists, missing_audio: v.missing_audio, errors: v.errors, ok: v.ok }
     }
 }
+
+/// What importing from a stick did.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct UsbImportReport {
+    /// Tracks whose cues and beat grid were replaced.
+    pub tracks: u32,
+    /// Play-history sessions brought in.
+    pub histories: u32,
+    /// CDJ/mixer settings files copied.
+    pub settings: u32,
+    pub skipped: u32,
+    pub warnings: Vec<String>,
+}
+
+impl From<rbl_app::usb_import::UsbImportReport> for UsbImportReport {
+    fn from(r: rbl_app::usb_import::UsbImportReport) -> Self {
+        let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
+        Self { tracks: n(r.tracks), histories: n(r.histories), settings: n(r.settings), skipped: n(r.skipped), warnings: r.warnings }
+    }
+}
+
+/// One folder or playlist of an iTunes / Music library.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ItunesNode {
+    /// `itunes:<index>`, to name it for an import.
+    pub id: String,
+    pub name: String,
+    pub is_folder: bool,
+    /// 0 for top level.
+    pub depth: u32,
+    pub track_count: Option<u32>,
+}
+
+/// An iTunes / Music library read for browsing; nothing is imported.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ItunesLibrary {
+    pub path: String,
+    pub tree: Vec<ItunesNode>,
+}
+
+impl From<rbl_app::dto::ItunesLibraryDto> for ItunesLibrary {
+    fn from(l: rbl_app::dto::ItunesLibraryDto) -> Self {
+        Self {
+            path: l.path,
+            tree: l
+                .tree
+                .into_iter()
+                .map(|n| ItunesNode {
+                    is_folder: n.kind == "folder",
+                    id: n.id,
+                    name: n.name,
+                    depth: n.depth.saturating_sub(1),
+                    track_count: n.child_count,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// One track of an iTunes playlist.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ItunesTrack {
+    pub id: String,
+    pub title: String,
+    pub artist: String,
+    pub path: Option<String>,
+    pub rating: u8,
+    pub comment: String,
+}
+
+impl From<rbl_app::itunes::ItunesTrackDto> for ItunesTrack {
+    fn from(t: rbl_app::itunes::ItunesTrackDto) -> Self {
+        Self { id: t.id, title: t.title, artist: t.artist, path: t.path, rating: t.rating, comment: t.comment }
+    }
+}

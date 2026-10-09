@@ -3,13 +3,14 @@ import Observation
 
 /// The source list's top-level sections, in display order.
 enum SidebarSection: String, CaseIterable, Sendable {
-    case playlists, histories, explorer, devices, tagList
+    case playlists, histories, explorer, itunes, devices, tagList
 
     var title: String {
         switch self {
         case .playlists: "Playlists"
         case .histories: "Histories"
         case .explorer: "Explorer"
+        case .itunes: "iTunes"
         case .devices: "Devices"
         case .tagList: "Tag List"
         }
@@ -28,6 +29,8 @@ final class SidebarNode {
         case note
         case device
         case tagList
+        /// The iTunes / Music library browser (read-only).
+        case itunes
     }
 
     let id: String
@@ -87,6 +90,7 @@ final class SidebarNode {
             case .playlists: "music.note.list"
             case .histories: "clock"
             case .explorer: "externaldrive"
+            case .itunes: "music.note.tv"
             case .devices: "cable.connector"
             case .tagList: "tag"
             }
@@ -101,6 +105,7 @@ final class SidebarNode {
         case .note: "ellipsis"
         case .device: "externaldrive.fill"
         case .tagList: "tag"
+        case .itunes: "music.quarternote.3"
         }
     }
 
@@ -172,6 +177,7 @@ final class SidebarModel {
         }
         section(.devices).children = [Self.noDevicesNote(parent: section(.devices))]
         section(.tagList).children = [Self.tagListNode(parent: section(.tagList))]
+        section(.itunes).children = [Self.itunesNode(parent: section(.itunes))]
     }
 
     func section(_ which: SidebarSection) -> SidebarNode {
@@ -255,6 +261,14 @@ final class SidebarModel {
         let note = SidebarNode(id: noDevicesID, kind: .note, name: "No devices")
         note.parent = parent
         return note
+    }
+
+    static let itunesID = "itunes"
+
+    private static func itunesNode(parent: SidebarNode) -> SidebarNode {
+        let node = SidebarNode(id: itunesID, kind: .itunes, name: "Music Library")
+        node.parent = parent
+        return node
     }
 
     private static func tagListNode(parent: SidebarNode) -> SidebarNode {

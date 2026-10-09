@@ -40,6 +40,9 @@ enum MenuCommand: Equatable, Sendable {
     case exportTrackToDevice(String)
     case ejectDevice
     case openSyncManager
+    // Phase 5b.
+    /// Opens the Import from USB sheet for the device.
+    case importFromDevice
 }
 
 struct MenuItemSpec: Equatable {
@@ -257,6 +260,8 @@ enum ContextMenus {
             return rows
         case .device:
             return [
+                deviceBusy ? grey("Import from Device\u{2026}") : live("Import from Device\u{2026}", .importFromDevice),
+                .separator,
                 deviceBusy ? grey("Eject") : live("Eject", .ejectDevice),
                 .separator,
                 live("Sync Manager\u{2026}", .openSyncManager),

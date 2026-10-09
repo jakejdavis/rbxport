@@ -38,9 +38,9 @@ struct SidebarTests {
 
     @Test func sectionsComeInOrderAndHideWhenEmpty() {
         let model = sidebar()
-        #expect(model.visibleSections.map(\.name) == ["Playlists", "Histories", "Explorer", "Devices", "Tag List"])
+        #expect(model.visibleSections.map(\.name) == ["Playlists", "Histories", "Explorer", "iTunes", "Devices", "Tag List"])
         model.setLibraryTree([node("all", "All Tracks", .allTracks, 0, count: 0)])
-        #expect(model.visibleSections.map(\.name) == ["Playlists", "Explorer", "Devices", "Tag List"])
+        #expect(model.visibleSections.map(\.name) == ["Playlists", "Explorer", "iTunes", "Devices", "Tag List"])
     }
 
     @Test func playlistsNestUnderTheirFoldersWithKindPrefixedIDs() {

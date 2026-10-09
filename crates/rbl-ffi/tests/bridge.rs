@@ -624,12 +624,55 @@ fn devices_export_sync_and_settings_work_over_the_bridge_on_fake_sticks() {
     assert_eq!(state.on_device, ["Gig"]);
     assert!(!state.automatic);
 
+    // Import back from the stick: refused while Library Protection is on, counted when it is off.
+    core.set_protect_library(true);
+    assert!(matches!(core.import_usb(two_path.clone(), true, true, true), Err(FfiError::ReadOnly { .. })));
+    core.set_protect_library(false);
+    events.0.lock().unwrap().clear();
+    let imported_back = core.import_usb(two_path.clone(), true, true, false).unwrap();
+    assert_eq!(imported_back.tracks + imported_back.skipped, 2, "both tracks matched by identity; neither is analysed here");
+    assert!(events.0.lock().unwrap().iter().any(|e| matches!(e, LibraryEvent::ImportProgress { .. })));
+    assert!(core.import_usb("/nonexistent-rbxport-stick".into(), false, true, false).is_err());
+
     // Eject: refused while a job is in flight is covered in rbl-app; here, a non-volume is refused.
     assert!(core.eject_device(one_path).is_err());
     // The watcher starts once however often it is asked (its events are covered in rbl-app).
     core.start_device_watcher();
     core.start_device_watcher();
     std::env::remove_var("RB_LITE_FAKE_VOLUMES");
+}
+
+#[test]
+fn itunes_libraries_are_browsed_read_only_and_imported_through_the_gate() {
+    let (dir, core, events) = core();
+    // A fixture library never looks in the real Music folder.
+    assert!(core.itunes_default_library().unwrap().is_none());
+    let wav = dir.path().join("Song.wav");
+    click_wav(&wav, 2);
+    let xml = dir.path().join("Library.xml");
+    std::fs::write(&xml, format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>Tracks</key><dict>
+<key>1</key><dict><key>Track ID</key><integer>1</integer><key>Name</key><string>Song</string><key>Artist</key><string>Ann</string><key>Location</key><string>file://localhost{}</string></dict>
+</dict><key>Playlists</key><array>
+<dict><key>Name</key><string>Sets</string><key>Playlist Persistent ID</key><string>F1</string><key>Folder</key><true/></dict>
+<dict><key>Name</key><string>Warm</string><key>Playlist Persistent ID</key><string>P1</string><key>Parent Persistent ID</key><string>F1</string><key>Playlist Items</key><array><dict><key>Track ID</key><integer>1</integer></dict></array></dict>
+</array></dict></plist>"#, wav.display())).unwrap();
+    let path = xml.display().to_string();
+    let library = core.itunes_library_at(path.clone()).unwrap();
+    assert_eq!(library.tree.iter().map(|n| (n.name.as_str(), n.is_folder, n.depth)).collect::<Vec<_>>(), [("Sets", true, 0), ("Warm", false, 1)]);
+    let tracks = core.itunes_playlist_tracks(path.clone(), "itunes:1".into()).unwrap();
+    assert_eq!((tracks.len(), tracks[0].title.as_str()), (1, "Song"));
+    assert_eq!(core.summary().unwrap().track_count, 40, "browsing writes nothing");
+
+    core.set_protect_library(true);
+    assert!(matches!(core.import_itunes_selected(path.clone(), vec!["itunes:1".into()]), Err(FfiError::ReadOnly { .. })));
+    core.set_protect_library(false);
+    let report = core.import_itunes_selected(path.clone(), vec!["itunes:1".into()]).unwrap();
+    assert_eq!((report.imported, report.playlists, report.existing), (1, 2, 0));
+    assert_eq!(core.summary().unwrap().track_count, 41);
+    assert!(events.0.lock().unwrap().iter().any(|e| matches!(e, LibraryEvent::ImportProgress { .. })));
+    let again = core.import_itunes_selected(path, vec!["itunes:1".into()]).unwrap();
+    assert_eq!((again.imported, again.existing), (0, 1));
 }
 
 /// Prepares a fixture directory for the manual screenshot run: a 40 s click track on the first
