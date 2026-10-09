@@ -127,6 +127,17 @@ pub fn plan() -> Result<Option<Plan>> {
     plan_at(&crate::options_location()?, &crate::default_library_dir()?)
 }
 
+/// [`plan`] for a library to be made in `default_dir` when no `options.json`
+/// says where the library goes. The options file is the usual one.
+pub fn plan_in(default_dir: &Path) -> Result<Option<Plan>> {
+    plan_at(&crate::options_location()?, default_dir)
+}
+
+/// The folder a library is made in when no `options.json` says.
+pub fn default_dir() -> Result<PathBuf> {
+    crate::default_library_dir()
+}
+
 /// [`plan`] for a given options file and default library folder.
 pub fn plan_at(options_json: &Path, default_dir: &Path) -> Result<Option<Plan>> {
     if options_json.exists() {

@@ -168,6 +168,30 @@ protocol BackendProtocol: Sendable {
     func linkSetMaster(on: Bool) async -> LinkStatus
     func linkNudgeMaster(deltaBpm: Double) async -> LinkStatus
     func linkTakeMasterTempo() async -> LinkStatus
+
+    // MARK: Phase 6b: backups, the bug report, a new library. Backups run only on the user's say-so.
+
+    /// Starts a backup on its own thread; `.backupProgress` events follow. Refused while one runs.
+    func startBackup() async throws
+    func cancelBackup() async
+    func backupProgress() async -> BackupProgress
+    /// The archives in the backup folder, newest first.
+    func listBackups() async throws -> [BackupInfo]
+    func deleteBackup(path: String) async throws
+    func backupDirectory() async -> String
+    /// Remembers a new folder for backups; returns it as kept. Refused while a backup runs.
+    func setBackupDirectory(_ path: String) async throws -> String
+    /// Makes the folder if it is not there yet, so Finder can show it.
+    func ensureBackupDirectory() async throws -> String
+    /// The build, machine, process and the end of the log. Nothing is sent anywhere.
+    func systemReport() async -> SystemReport
+    func audioHealth() async -> AudioHealth
+    /// Where a new library would go; nil when there is a database already.
+    func planNewLibrary() async throws -> NewLibraryPlan?
+    /// Makes an empty library and loads it. `folder` only when the plan allows choosing.
+    func createLibrary(folder: String?) async throws -> LoadOutcome
+    /// Why the last load failed, if it did.
+    func libraryProblem() async -> LibraryProblem?
 }
 
 /// Forwards the Rust core's callbacks into an `AsyncStream`.
@@ -460,6 +484,38 @@ actor Backend: BackendProtocol {
     func linkSetMaster(on: Bool) async -> LinkStatus { core.linkSetMaster(on: on) }
     func linkNudgeMaster(deltaBpm: Double) async -> LinkStatus { core.linkNudgeMaster(deltaBpm: deltaBpm) }
     func linkTakeMasterTempo() async -> LinkStatus { core.linkTakeMasterTempo() }
+
+    func startBackup() async throws { try core.startBackup() }
+    func cancelBackup() async { core.cancelBackup() }
+    func backupProgress() async -> BackupProgress { core.backupProgress() }
+    func listBackups() async throws -> [BackupInfo] {
+        let core = core
+        return try await Task.detached { try core.listBackups() }.value
+    }
+    func deleteBackup(path: String) async throws {
+        let core = core
+        try await Task.detached { try core.deleteBackup(path: path) }.value
+    }
+    func backupDirectory() async -> String { core.backupDirectory() }
+    func setBackupDirectory(_ path: String) async throws -> String {
+        let core = core
+        return try await Task.detached { try core.setBackupDirectory(directory: path) }.value
+    }
+    func ensureBackupDirectory() async throws -> String { try core.ensureBackupDirectory() }
+    func systemReport() async -> SystemReport {
+        let core = core
+        return await Task.detached { core.systemReport() }.value
+    }
+    func audioHealth() async -> AudioHealth {
+        (playback as? RustPlayback)?.audioHealth() ?? AudioHealth(load: 0, xruns: 0)
+    }
+    func planNewLibrary() async throws -> NewLibraryPlan? { try core.planNewLibrary() }
+    // Makes a database and indexes it: off the actor.
+    func createLibrary(folder: String?) async throws -> LoadOutcome {
+        let core = core
+        return try await Task.detached { try core.createLibrary(folder: folder) }.value
+    }
+    func libraryProblem() async -> LibraryProblem? { core.libraryProblem() }
 }
 
 func describe(_ error: Error) -> String {

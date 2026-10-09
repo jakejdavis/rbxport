@@ -11,7 +11,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-#[derive(Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupProgress {
     pub running: bool,
@@ -25,16 +25,29 @@ pub struct BackupProgress {
 
 /// Reserve the job before spawning, so requests from two windows cannot queue duplicates.
 pub fn start(state: std::sync::Arc<AppState>) -> AppResult<()> {
+    start_with_sink(state, None)
+}
+
+/// [`start`], raising `backup:progress` on `sink` as the job moves (at most about ten times a
+/// second, and always on a change of phase and at the end), for a front end that does not poll.
+pub fn start_with_sink(state: std::sync::Arc<AppState>, sink: Option<std::sync::Arc<dyn crate::events::EventSink>>) -> AppResult<()> {
+    let announce = move |progress: &BackupProgress| {
+        if let Some(sink) = &sink {
+            sink.emit(crate::events::AppEvent::BackupProgress(progress.clone()));
+        }
+    };
     {
         let mut progress = state.backup_progress.lock();
         if progress.running {
             return Err(error("A backup is already running."));
         }
         *progress = BackupProgress { running: true, phase: "preparing".into(), ..Default::default() };
+        announce(&progress);
     }
     // A plain thread: the job outlives the call and reports through `BackupProgress`.
     std::thread::spawn(move || {
         let mut last_detail = std::time::Instant::now();
+        let mut last_event = std::time::Instant::now();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             create_with_progress(&state, &mut |phase, copied_bytes, total_bytes, item| {
                 let mut progress = state.backup_progress.lock();
@@ -45,9 +58,14 @@ pub fn start(state: std::sync::Arc<AppState>) -> AppResult<()> {
                     progress.current_item = Some(item.to_owned());
                     last_detail = std::time::Instant::now();
                 }
+                let changed = progress.phase != phase;
                 progress.phase = phase.into();
                 progress.copied_bytes = copied_bytes;
                 progress.total_bytes = total_bytes;
+                if changed || last_event.elapsed() >= std::time::Duration::from_millis(100) {
+                    last_event = std::time::Instant::now();
+                    announce(&progress);
+                }
                 Ok(())
             })
         })).unwrap_or_else(|_| Err(error("Backup worker stopped unexpectedly.")));
@@ -59,6 +77,7 @@ pub fn start(state: std::sync::Arc<AppState>) -> AppResult<()> {
             Err(e) if e.kind == crate::error::ErrorKind::Cancelled => { progress.phase = "cancelled".into(); }
             Err(e) => { progress.phase = "failed".into(); progress.error = Some(failure_message(&e)); }
         }
+        announce(&progress);
     });
     Ok(())
 }
@@ -75,6 +94,11 @@ fn failure_message(error: &AppError) -> String {
 pub fn cancel(state: &AppState) {
     let mut progress = state.backup_progress.lock();
     if progress.running { progress.phase = "stopping".into(); }
+}
+
+/// Where the job has got to.
+pub fn progress(state: &AppState) -> BackupProgress {
+    state.backup_progress.lock().clone()
 }
 
 fn tree_size(path: &Path, check: &mut dyn FnMut() -> AppResult<()>) -> AppResult<u64> {
@@ -482,6 +506,102 @@ mod tests {
             &mut |_, _, _, _| Ok(()),
         )
         .unwrap();
+    }
+
+    /// Collects the `backup:progress` events a job raises.
+    #[derive(Default)]
+    struct Collect(parking_lot::Mutex<Vec<BackupProgress>>);
+    impl crate::events::EventSink for Collect {
+        fn emit(&self, event: crate::events::AppEvent) {
+            if let crate::events::AppEvent::BackupProgress(progress) = event {
+                self.0.lock().push(progress);
+            }
+        }
+    }
+
+    fn wait_until_idle(state: &AppState) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        while progress(state).running {
+            assert!(std::time::Instant::now() < deadline, "the backup did not end");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn a_started_backup_raises_progress_events_and_ends_complete() {
+        let (_dir, state, _) = fixture();
+        let state = std::sync::Arc::new(state);
+        let sink = std::sync::Arc::new(Collect::default());
+        start_with_sink(std::sync::Arc::clone(&state), Some(sink.clone())).unwrap();
+        wait_until_idle(&state);
+
+        let events = sink.0.lock().clone();
+        assert_eq!(events.first().map(|p| p.phase.as_str()), Some("preparing"));
+        assert!(events.first().is_some_and(|p| p.running));
+        let last = events.last().unwrap();
+        assert_eq!(last.phase, "complete");
+        assert!(!last.running);
+        let path = last.path.clone().unwrap();
+        let listed = list(&state).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(PathBuf::from(&listed[0].path).canonicalize().unwrap(), PathBuf::from(&path).canonicalize().unwrap());
+        assert!(listed[0].bytes > 0);
+        assert!(events.iter().any(|p| p.phase == "copying" || p.phase == "compressing"), "the phases in between are announced: {events:?}");
+    }
+
+    #[test]
+    fn a_second_start_is_refused_while_one_runs() {
+        let (_dir, state, _) = fixture();
+        let state = std::sync::Arc::new(state);
+        state.backup_progress.lock().running = true;
+        let err = start(std::sync::Arc::clone(&state)).unwrap_err();
+        assert!(err.detail.as_deref().unwrap_or_default().contains("already running"), "{err:?}");
+        // Changing the folder is refused too.
+        assert!(state.set_backup_destination(state.backup_dir()).is_err());
+    }
+
+    #[test]
+    fn cancelling_stops_the_job_and_leaves_no_archive() {
+        let (_dir, state, _) = fixture();
+        let state = std::sync::Arc::new(state);
+        let sink = std::sync::Arc::new(Collect::default());
+        start_with_sink(std::sync::Arc::clone(&state), Some(sink.clone())).unwrap();
+        cancel(&state);
+        assert!(matches!(progress(&state).phase.as_str(), "stopping" | "complete" | "cancelled" | "validating" | "copying" | "compressing" | "preparing"));
+        wait_until_idle(&state);
+        let last = progress(&state);
+        match last.phase.as_str() {
+            // The job saw the request: nothing is kept, not even a partial.
+            "cancelled" => {
+                assert!(list(&state).unwrap().is_empty());
+                let leftovers: Vec<_> = fs::read_dir(state.backup_destination()).map(|d| d.filter_map(Result::ok).map(|e| e.file_name()).collect()).unwrap_or_default();
+                assert!(leftovers.iter().all(|n| !n.to_string_lossy().contains("partial")), "{leftovers:?}");
+            }
+            // A fixture is small enough that the job can finish before the request lands.
+            "complete" => assert_eq!(list(&state).unwrap().len(), 1),
+            other => unreachable!("unexpected end: {other}"),
+        }
+        assert_eq!(sink.0.lock().last().map(|p| p.running), Some(false));
+    }
+
+    #[test]
+    fn a_new_destination_is_used_and_listing_follows_it() {
+        let (dir, state, _) = fixture();
+        let first = PathBuf::from(create(&state).unwrap());
+        assert!(first.starts_with(state.backup_destination()));
+        let elsewhere = dir.path().join("elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+        let chosen = state.set_backup_destination(&elsewhere).unwrap();
+        assert_eq!(PathBuf::from(&chosen), elsewhere.canonicalize().unwrap());
+        assert!(list(&state).unwrap().is_empty(), "existing archives stay where they were");
+        let second = PathBuf::from(create(&state).unwrap());
+        assert!(second.starts_with(elsewhere.canonicalize().unwrap()));
+        assert_eq!(list(&state).unwrap().len(), 1);
+        // Delete refuses a file outside the folder, and removes the one inside.
+        assert!(delete(&state, &first).is_err());
+        assert!(first.exists());
+        delete(&state, &second).unwrap();
+        assert!(list(&state).unwrap().is_empty());
     }
 
     #[test]

@@ -6,6 +6,7 @@ use rbl_app::{AppEvent, EventSink};
 
 use crate::devices::{ExportProgress, ExportReport, SyncProgress};
 use crate::link::{LinkPeer, LinkStatus};
+use crate::support::BackupProgress;
 use crate::types::{EditHistory, ImportProgress, LibraryProblem};
 
 /// Something that happened which the UI may want to redraw for.
@@ -24,6 +25,7 @@ pub enum LibraryEvent {
     ExportProgress { progress: ExportProgress },
     ExportDone { report: ExportReport },
     SyncProgress { progress: SyncProgress },
+    BackupProgress { progress: BackupProgress },
     LinkStatus { status: LinkStatus },
     LinkPeers { peers: Vec<LinkPeer> },
 }

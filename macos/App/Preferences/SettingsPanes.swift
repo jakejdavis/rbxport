@@ -4,7 +4,7 @@ import SwiftUI
 /// The Settings window: one tab per pane of the React Preferences window, in its order (View, Audio,
 /// Analysis, DJ System, Keyboard, Advanced, PRO DJ LINK, USB Export, About). Every control writes
 /// to the preferences store; the panes with something to reset have a Reset to Defaults button.
-/// Backups arrive with phase 6b. Rekordbox's "keep browse settings synchronized" has nothing behind
+/// Backups are a section of the Advanced pane. Rekordbox's "keep browse settings synchronized" has nothing behind
 /// it here yet, so it is not drawn.
 struct SettingsView: View {
     let model: AppModel
@@ -219,6 +219,7 @@ struct AdvancedPane: View {
                     note("Editing is still locked while rekordbox is running. Quit rekordbox to enable editing.")
                 }
             }
+            BackupsSection(model: model.backups)
             Section("History") {
                 Toggle("Record play history", isOn: $prefs.recordHistory)
             }
@@ -286,6 +287,7 @@ struct UsbExportPane: View {
 // MARK: - About
 
 struct AboutPane: View {
+    @Environment(\.openWindow) private var openWindow
     private var version: String {
         let info = Bundle.main.infoDictionary
         let short = info?["CFBundleShortVersionString"] as? String ?? "\u{2014}"
@@ -299,6 +301,10 @@ struct AboutPane: View {
                 LabeledContent("rbxport", value: version)
                 LabeledContent("Licence", value: "GPL-2.0-or-later")
                 note("Time stretching uses the Rubber Band Library under the same licence.")
+            }
+            Section("Support") {
+                Button("Report a Problem\u{2026}") { openWindow(id: BugReportScene.id) }
+                note("Shows what rbxport knows about this computer and its log. Nothing is sent.")
             }
             Section("Disclaimer") {
                 note(

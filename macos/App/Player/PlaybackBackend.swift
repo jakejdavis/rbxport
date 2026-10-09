@@ -111,6 +111,9 @@ final class RustPlayback: PlaybackEngine, @unchecked Sendable {
     /// Preview file opens block for up to ten seconds; they get their own queue.
     private let previews = DispatchQueue(label: "rbxport.playback.preview", qos: .userInitiated)
 
+    /// How hard the audio callback is working (zeros before the output opens), for the bug report.
+    func audioHealth() -> AudioHealth { playback.audioHealth() }
+
     init(playback: Playback, bridge: PlaybackBridge) {
         self.playback = playback
         events = bridge.stream

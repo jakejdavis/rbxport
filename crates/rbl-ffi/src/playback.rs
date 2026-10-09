@@ -353,6 +353,12 @@ impl Playback {
 #[uniffi::export]
 #[allow(clippy::needless_pass_by_value)]
 impl Playback {
+    /// How hard the audio callback is working, for the bug report. Zeros before the output opens.
+    pub fn audio_health(&self) -> crate::support::AudioHealth {
+        let health = self.player.opened().map(|engine| engine.audio_health()).unwrap_or_default();
+        crate::support::AudioHealth { load: health.load, xruns: health.xruns }
+    }
+
     /// Points a deck at a track. Returns once the engine has been told; the
     /// deck reports itself ready with a `DeckEvent`. Opens the audio output on
     /// first use, which can take a moment: call it off the main thread.

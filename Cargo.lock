@@ -4079,6 +4079,7 @@ dependencies = [
  "rbl-prolink",
  "serde",
  "serde_json",
+ "sysinfo",
  "tempfile",
  "thiserror 2.0.20",
  "time",
@@ -4261,6 +4262,9 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
  "uniffi",
 ]
 

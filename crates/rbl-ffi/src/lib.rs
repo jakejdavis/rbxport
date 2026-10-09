@@ -19,6 +19,7 @@ mod error;
 mod events;
 mod link;
 mod playback;
+mod support;
 mod types;
 
 pub use crate::core::Core;
@@ -28,6 +29,7 @@ pub use devices::{
     SyncProgress, SyncState, UsbImportReport, VerifyReport, WaveformColor, WaveformPosition,
 };
 pub use error::FfiError;
+pub use support::{install_logging, AudioHealth, BackupInfo, BackupPhase, BackupProgress, NewLibraryPlan, SystemReport};
 pub use link::{LinkConnection, LinkDeviceKind, LinkInterface, LinkLoaded, LinkPeer, LinkPlayer, LinkState, LinkStatus};
 pub use events::{EventListener, LibraryEvent};
 pub use playback::{

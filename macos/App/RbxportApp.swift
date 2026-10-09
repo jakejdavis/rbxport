@@ -11,6 +11,10 @@ struct RbxportApp: App {
         isUnderTest = env["XCTestConfigurationFilePath"] != nil || env["XCTestBundlePath"] != nil
             || NSClassFromString("XCTestCase") != nil
         let backend: any BackendProtocol
+        if !isUnderTest {
+            // A daily log file, so the Report a Problem window has something to show.
+            _ = try? installLogging()
+        }
         if isUnderTest {
             backend = MockBackend(trackCount: 0)
         } else if let dir = env["RBXPORT_FIXTURE_DIR"] {
@@ -19,7 +23,13 @@ struct RbxportApp: App {
         } else {
             backend = Backend(cacheDir: Backend.defaultCacheDir)
         }
-        _model = State(initialValue: AppModel(backend: backend))
+        // RBXPORT_DEFAULTS_SUITE (a path under a temporary folder) keeps a dev launch's settings and
+        // window frame out of the real preferences.
+        var store = ColumnLayoutStore()
+        if let suite = env["RBXPORT_DEFAULTS_SUITE"], DeviceDemoGuard.isTemporary(suite), let defaults = UserDefaults(suiteName: suite) {
+            store = ColumnLayoutStore(defaults: defaults)
+        }
+        _model = State(initialValue: AppModel(backend: backend, layoutStore: store))
     }
 
     var body: some Scene {
@@ -43,6 +53,10 @@ struct RbxportApp: App {
                 .environment(model)
         }
         .defaultSize(width: 900, height: 560)
+        Window("Report a Problem", id: BugReportScene.id) {
+            BugReportView(model: model.bugReport)
+        }
+        .defaultSize(width: 620, height: 600)
         Settings {
             SettingsView(model: model)
         }
@@ -72,6 +86,13 @@ struct RbxportApp: App {
                 await model.waitUntilSettled()
                 try? await Task.sleep(for: .milliseconds(1200))
                 await model.runImportDemo(steps, environment: env)
+            }
+        }
+        if let steps = env["RBXPORT_DEMO_CHROME"] {
+            Task { @MainActor in
+                await model.waitUntilSettled()
+                try? await Task.sleep(for: .milliseconds(1200))
+                await model.runChromeDemo(steps, environment: env)
             }
         }
         // RBXPORT_DEMO_LINK=1 shows a made-up LINK session in the strip and the LINK pane. It is only

@@ -36,7 +36,10 @@ final class AppModel {
     enum Phase: Equatable {
         case loading
         case ready
+        /// The library did not open: why, as the core said it.
         case failed(String)
+        /// There is no database, and one can be made at this path.
+        case missing(String)
     }
 
     let backend: any BackendProtocol
@@ -44,7 +47,7 @@ final class AppModel {
     let pager: RowPager
     let layoutStore: ColumnLayoutStore
 
-    private(set) var phase: Phase = .loading
+    var phase: Phase = .loading
     var summary: LibrarySummary? {
         didSet { info.editable = canEdit }
     }
@@ -64,6 +67,19 @@ final class AppModel {
     /// Phase 5b: the open Import from USB sheet, and the iTunes / Music library browser.
     var usbImport: UsbImportModel?
     private(set) var itunes: ItunesModel!
+    /// The New Library sheet, over the library-problem view.
+    var newLibrary: NewLibraryModel?
+    /// Bumped to ask the main window to open the Report a Problem window.
+    var reportWindowRequests = 0
+    /// Quits the app (the problem view's Quit); replaced in tests.
+    @ObservationIgnored var terminate: () -> Void = { NSApp.terminate(nil) }
+    /// Settings > Advanced > Backups.
+    private(set) var backups: BackupsModel!
+    /// The Report a Problem window.
+    private(set) var bugReport: BugReportModel!
+    /// The main window's frame and the widths of its side panels.
+    let geometry: WindowGeometryStore
+    @ObservationIgnored private(set) var windowGeometry: MainWindowGeometry!
     /// Panels and alerts; tests replace them.
     var dialogs = Dialogs.live
     /// An import is running (the status bar shows `importProgress`).
@@ -221,6 +237,7 @@ final class AppModel {
         self.layoutStore = layoutStore
         let prefs = PreferencesStore(defaults: layoutStore.defaults)
         self.prefs = prefs
+        geometry = WindowGeometryStore(defaults: layoutStore.defaults)
         sidebar = SidebarModel(backend: backend, defaults: layoutStore.defaults, prefs: prefs)
         selectedNodeID = layoutStore.defaults.string(forKey: SidebarModel.Keys.selected)
         filterBarOpen = layoutStore.defaults.bool(forKey: "filterBar.open")
@@ -248,6 +265,18 @@ final class AppModel {
                 self?.importInFlight = on
                 self?.importProgress = on ? ImportProgressState(done: 0, total: 0, title: "") : nil
             })
+        windowGeometry = MainWindowGeometry(store: geometry)
+        backups = BackupsModel(
+            backend: backend, dialogs: { [weak self] in self?.dialogs ?? .live }, notify: { [weak self] in self?.notice = $0 })
+        bugReport = BugReportModel(backend: backend, library: { [weak self] in
+            guard let self else { return (nil, "Not loaded.") }
+            switch self.phase {
+            case .ready: return (self.summary, nil)
+            case .loading: return (nil, "Still loading.")
+            case .failed(let message): return (nil, "Did not load: \(message)")
+            case .missing(let path): return (nil, "No database at \(path).")
+            }
+        })
         info.onEdit = { [weak self] edit, id in await self?.applyInfoEdit(edit, to: id) ?? false }
         onLoadToDeck = { [weak self] id, deck in
             guard let self else { return }
@@ -341,7 +370,7 @@ final class AppModel {
         case .libraryProblem(let problem):
             switch problem {
             case .failed(let message): phase = .failed(message)
-            case .missing(let masterDb): phase = .failed("No rekordbox library found at \(masterDb).")
+            case .missing(let masterDb): phase = .missing(masterDb)
             }
         case .editHistoryChanged(let history):
             editHistory = history
@@ -357,6 +386,8 @@ final class AppModel {
             exportJobs.handle(progress: progress)
         case .syncProgress(let progress):
             exportJobs.handle(sync: progress)
+        case .backupProgress(let progress):
+            backups.handle(progress: progress)
         case .linkStatus(let status):
             link.handle(status: status)
         case .linkPeers(let peers):
