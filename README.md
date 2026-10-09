@@ -44,7 +44,7 @@ first.
 | Layer | Technology |
 | --- | --- |
 | Desktop app | SwiftUI and AppKit, with an `NSTableView` for track browsing. |
-| Bridge | UniFFI, over the Tauri-free `rbl-app` core. |
+| Bridge | UniFFI, over the `rbl-app` core. |
 | Backend | Rust, with independent `rbl-*` crates for library, audio, export, and LINK logic. |
 | Database | SQLCipher for rekordbox libraries and OneLibrary USB exports. |
 | Build tooling | Xcode, XcodeGen, and Cargo. |
@@ -74,12 +74,9 @@ For signing, packaging, and the DMG, read [macOS app](macos/README.md).
 Read these in order to understand the project and make your first change:
 
 1. [macOS app](macos/README.md): prerequisites, build, the bridge, and the Swift architecture.
-2. [Architecture](docs/development/architecture.md): crate responsibilities and edit flow.
-3. [Development conventions](docs/development/conventions.md): code style, performance, translation, and evidence rules.
-4. [Testing](docs/development/testing.md): checks, test setup, and what each result proves.
-5. [Contributing](CONTRIBUTING.md): issues, branches, implementation, validation, and review.
-6. [Debugging](docs/development/debugging.md): logs, diagnostics, environment variables, and cleanup.
-7. [Releases](docs/development/releases.md): versions, CI, packaging, and publication.
+2. [Crates](crates/README.md): what each `rbl-*` crate owns and how to test it safely.
+3. [Contributing](CONTRIBUTING.md): issues, branches, implementation, validation, and review.
+4. [Changelog](CHANGELOG.md): what changed in each version.
 
 The [documentation index](docs/README.md) also links to user guides and detailed
 analysis, USB-format, and hardware references.
