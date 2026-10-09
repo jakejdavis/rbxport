@@ -21,6 +21,8 @@ pub mod file_journal;
 pub mod link;
 pub mod media;
 pub mod network_labels;
+pub mod player;
+pub mod preview;
 pub mod rx3_link;
 pub mod startup;
 pub mod state;

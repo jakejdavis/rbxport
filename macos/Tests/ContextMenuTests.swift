@@ -30,12 +30,15 @@ struct ContextMenuTests {
         #expect(live.map(\.command) == [.showInformation, .showInFinder])
     }
 
-    @Test func loadToPlayersIsGreyedUntilThePlayerExists() {
+    @Test func loadToPlayer1IsLiveForOneTrackAndPlayer2WaitsForTheDualDecks() {
         let rows = ContextMenus.trackMenu(.init(selectionCount: 1))
         let load = items(rows).first { $0.title == "Load" }!
-        #expect(!load.isEnabled)
+        #expect(load.isEnabled)
         #expect(titles(load.submenu!) == ["Load track to player 1", "Load track to player 2"])
-        #expect(items(load.submenu!).allSatisfy { !$0.isEnabled })
+        #expect(items(load.submenu!).map(\.isEnabled) == [true, false])
+        #expect(items(load.submenu!).first?.command == .loadToDeck(.a))
+        let many = items(ContextMenus.trackMenu(.init(selectionCount: 2))).first { $0.title == "Load" }!
+        #expect(!many.isEnabled)
     }
 
     @Test func withNothingSelectedEverythingIsGreyed() {

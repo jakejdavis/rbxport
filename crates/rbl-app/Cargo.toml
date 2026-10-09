@@ -21,6 +21,7 @@ rbl-anlz = { path = "../rbl-anlz" }
 rbl-prolink = { path = "../rbl-prolink" }
 rbl-link = { path = "../rbl-link" }
 rbl-devices = { path = "../rbl-devices" }
+rbl-deck = { path = "../rbl-deck" }
 rbl-backup = { path = "../rbl-backup" }
 parking_lot = "0.12"
 uuid = { version = "1", features = ["v4"] }

@@ -13,6 +13,7 @@ use rbl_db::{Library as Db, LibraryLocation, OpenMode};
 
 use crate::error::FfiError;
 use crate::events::{EventListener, ListenerSink};
+use crate::playback::{Playback, PlaybackListener};
 use crate::types::{
     Device, ExplorerChildren, ExplorerRoot, ExtraColumn, FilterValues, LibraryProblem, PlaylistFileFormat, LibrarySummary, LoadOutcome, Row, TrackDetails, TrackLookups, TreeNode, ViewHandle, ViewSpec, WaveformKind,
 };
@@ -198,6 +199,12 @@ impl Core {
     /// A track's overview waveform for a palette; empty when it has no analysis.
     pub fn waveform(&self, track_id: String, kind: WaveformKind) -> Result<Vec<u8>, FfiError> {
         ffi("waveform", || media::track_waveform(&self.state, &track_id, kind.wire(), None, None))
+    }
+
+    /// The decks and the preview player, reporting to `listener`. Make one and
+    /// keep it. Honours `RBXPORT_NULL_AUDIO=1` (silent output, no device).
+    pub fn playback(&self, listener: Arc<dyn PlaybackListener>) -> Arc<Playback> {
+        Arc::new(Playback::new(Arc::clone(&self.state), listener))
     }
 
     /// A track's artwork image file, or `None` (no artwork, missing file, refused path, over 8 MiB).

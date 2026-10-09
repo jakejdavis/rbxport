@@ -27,7 +27,11 @@ struct RbxportApp: App {
             ContentView()
                 .environment(model)
                 .frame(minWidth: 900, minHeight: 500)
-                .task { if !isUnderTest { model.start() } }
+                .task {
+                    guard !isUnderTest else { return }
+                    model.start()
+                    model.player.installKeyMonitor()
+                }
         }
         .commands {
             CommandGroup(after: .textEditing) {
@@ -58,6 +62,11 @@ struct RbxportApp: App {
                     isOn: Binding(get: { model.filterBarOpen }, set: { model.filterBarOpen = $0 })
                 )
                 .keyboardShortcut("f", modifiers: [.command, .option])
+                Toggle(
+                    "Show Player",
+                    isOn: Binding(get: { model.player.panelOpen }, set: { model.player.panelOpen = $0 })
+                )
+                .keyboardShortcut("p", modifiers: [.command, .option])
                 Toggle(
                     "Show Information",
                     isOn: Binding(get: { model.infoPanelOpen }, set: { model.infoPanelOpen = $0 })

@@ -5,6 +5,8 @@ import Foundation
 enum MenuCommand: Equatable, Sendable {
     case showInFinder
     case showInformation
+    /// Load the selected track onto a deck (Player 1 is deck A).
+    case loadToDeck(Deck)
     case exportPlaylist(PlaylistFileFormat)
 }
 
@@ -49,12 +51,19 @@ enum ContextMenus {
         var inExplorer = false
     }
 
-    /// Right-clicking a track, top to bottom as `TRACK_MENU` has it. Phase 2 makes Show in
-    /// Finder and Show information live; Load needs the player (Phase 3), the rest edits (Phase 4).
+    /// Right-clicking a track, top to bottom as `TRACK_MENU` has it. Show in Finder, Show
+    /// information and Load track to player 1 are live; player 2 arrives with the dual decks,
+    /// the rest are edits (Phase 4).
     static func trackMenu(_ context: TrackContext) -> [MenuRow] {
         let hasSelection = context.selectionCount > 0
         var rows: [MenuRow] = [
-            grey("Load", [grey("Load track to player 1"), grey("Load track to player 2")]),
+            .item(
+                MenuItemSpec(
+                    title: "Load", command: nil,
+                    submenu: [
+                        context.selectionCount == 1 ? live("Load track to player 1", .loadToDeck(.a)) : grey("Load track to player 1"),
+                        grey("Load track to player 2"),
+                    ])),
             .separator,
             grey("Import To Collection"),
             grey("Analyze Track"),

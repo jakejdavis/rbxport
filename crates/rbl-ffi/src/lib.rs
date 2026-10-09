@@ -16,11 +16,13 @@ mod convert;
 mod core;
 mod error;
 mod events;
+mod playback;
 mod types;
 
 pub use crate::core::Core;
 pub use error::FfiError;
 pub use events::{EventListener, LibraryEvent};
+pub use playback::{Deck, DeckEvent, DeckTick, Meters, Playback, PlaybackListener, PlaybackTick, PreviewState};
 pub use types::{
     BpmFilter, CountedBpm, CountedKey, Device, DeviceExport, EditHistory, ExplorerChildren, ExplorerRoot, ExtraColumn,
     FilterValues, PlaylistFileFormat, TagCategory, TrackFilter, ExtraFields, HotCue, LibraryProblem, LibrarySummary, LoadOutcome, NodeKind, Row,

@@ -25,6 +25,7 @@ required-features = ["cli"]
 [dependencies]
 rbl-app = { path = "../rbl-app" }
 rbl-db = { path = "../rbl-db" }
+rbl-deck = { path = "../rbl-deck" }
 rbl-index = { path = "../rbl-index" }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

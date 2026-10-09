@@ -42,8 +42,9 @@ targets:
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.music
         INFOPLIST_KEY_NSHumanReadableCopyright: GPL-2.0-or-later
         ENABLE_HARDENED_RUNTIME: NO
-        # Static Rust library: SQLCipher/OpenSSL/sysinfo need these.
-        OTHER_LDFLAGS: "-lc++ -framework Security -framework CoreFoundation -framework SystemConfiguration -framework IOKit -framework CoreMIDI -framework CoreAudio -framework AudioToolbox"
+        # Static Rust library: SQLCipher/OpenSSL/sysinfo/CoreAudio/Rubber Band (Accelerate) need these;
+        # see `cargo rustc -p rbl-ffi --crate-type staticlib -- --print native-static-libs`.
+        OTHER_LDFLAGS: "-lc++ -framework Security -framework CoreFoundation -framework SystemConfiguration -framework IOKit -framework CoreMIDI -framework CoreAudio -framework AudioToolbox -framework Accelerate -framework DiskArbitration -framework Foundation"
   rbxportTests:
     type: bundle.unit-test
     platform: macOS
