@@ -24,22 +24,53 @@ struct DeckPanel: View {
     let player: PlayerModel
     let palette: WaveformPalette
 
+    /// Narrower than this and the panel scrolls sideways: its controls never ask the window for
+    /// more room (a content minimum wider than the detail column set the split view's size
+    /// constraints chasing each other).
+    static let contentWidth = 800.0
+
     var body: some View {
+        GeometryReader { geometry in
+            ScrollView(.horizontal, showsIndicators: false) {
+                content
+                    .frame(width: max(geometry.size.width, Self.contentWidth), height: geometry.size.height)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+        }
+        .background(PlayerStyle.background)
+        .environment(\.colorScheme, .dark)
+        .overlay(alignment: .bottomLeading) { noticeBanner }
+    }
+
+    private var content: some View {
         HStack(alignment: .top, spacing: 14) {
-            Sleeve(deck: deck)
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(spacing: 8) {
+                Sleeve(deck: deck)
+                VUMeters(player: player, deck: deck)
+                    .frame(maxHeight: .infinity)
+            }
+            VStack(alignment: .leading, spacing: 6) {
                 header
+                PhraseStrip(deck: deck)
+                    .frame(height: 14)
                 OverviewWaveform(deck: deck, palette: palette)
-                    .frame(minHeight: 56, maxHeight: .infinity)
-                transport
+                    .frame(height: 46)
+                HStack(spacing: 6) {
+                    ZoomColumn(deck: deck)
+                    DetailWaveform(deck: deck, palette: palette)
+                        .clipShape(.rect(cornerRadius: 2))
+                        .frame(minHeight: 110, maxHeight: .infinity)
+                        .accessibilityLabel("Waveform")
+                }
+                controls
             }
             TempoColumn(deck: deck)
         }
         .padding(12)
-        .frame(maxWidth: .infinity)
-        .background(PlayerStyle.background)
-        .environment(\.colorScheme, .dark)
-        .overlay(alignment: .bottomLeading) {
+    }
+
+    @ViewBuilder private var noticeBanner: some View {
+        do {
             if let notice = player.notice {
                 HStack(spacing: 6) {
                     Text(notice).lineLimit(1)
@@ -70,7 +101,7 @@ struct DeckPanel: View {
             }
             Spacer(minLength: 8)
             if let track = deck.track {
-                if !track.key.isEmpty { KeyChip(key: track.key) }
+                if !track.key.isEmpty { KeyShiftView(deck: deck) }
                 BpmReadout(deck: deck, track: track)
             }
         }
@@ -97,14 +128,51 @@ struct DeckPanel: View {
 
     // MARK: Transport and time
 
-    private var transport: some View {
-        HStack(spacing: 12) {
-            CueButton(deck: deck)
-            PlayButton(deck: deck)
-            Spacer(minLength: 8)
-            TimeReadout(deck: deck)
+    /// The transport, pads, memory cues, loops, jump, Q and metronome. In two rows when the
+    /// column is wide enough, in three when it is not; the narrowest still has to fit the window.
+    private var controls: some View {
+        ViewThatFits(in: .horizontal) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 10) {
+                    CueButton(deck: deck)
+                    PlayButton(deck: deck)
+                    PadRow(deck: deck)
+                    MemoryCueButtons(deck: deck)
+                    Spacer(minLength: 8)
+                    TimeReadout(deck: deck)
+                }
+                .frame(height: 40)
+                HStack(spacing: 16) {
+                    LoopControls(deck: deck)
+                    JumpControls(deck: deck)
+                    ModeChips(deck: deck)
+                    Spacer(minLength: 0)
+                }
+                .frame(height: 26)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 10) {
+                    CueButton(deck: deck)
+                    PlayButton(deck: deck)
+                    PadRow(deck: deck)
+                    Spacer(minLength: 8)
+                    TimeReadout(deck: deck)
+                }
+                .frame(height: 40)
+                HStack(spacing: 16) {
+                    MemoryCueButtons(deck: deck)
+                    ModeChips(deck: deck)
+                    Spacer(minLength: 0)
+                }
+                .frame(height: 26)
+                HStack(spacing: 16) {
+                    LoopControls(deck: deck)
+                    JumpControls(deck: deck)
+                    Spacer(minLength: 0)
+                }
+                .frame(height: 26)
+            }
         }
-        .frame(height: 44)
     }
 }
 
@@ -127,20 +195,6 @@ private struct Sleeve: View {
         .clipShape(.rect(cornerRadius: 3))
         .overlay(RoundedRectangle(cornerRadius: 3).stroke(.white.opacity(0.12), lineWidth: 0.5))
         .accessibilityLabel("Artwork")
-    }
-}
-
-private struct KeyChip: View {
-    let key: String
-
-    var body: some View {
-        VStack(spacing: 1) {
-            Text("KEY").font(.system(size: 8, weight: .bold)).foregroundStyle(PlayerStyle.dim)
-            Text(key).font(.system(size: 16, weight: .semibold, design: .rounded)).foregroundStyle(PlayerStyle.cue)
-        }
-        .padding(.horizontal, 8).padding(.vertical, 3)
-        .background(PlayerStyle.panel, in: .rect(cornerRadius: 3))
-        .accessibilityLabel("Key \(key)")
     }
 }
 
@@ -205,7 +259,7 @@ private struct CueButton: View {
         Text("CUE")
             .font(.system(size: 12, weight: .bold))
             .foregroundStyle(held ? .black : PlayerStyle.cue)
-            .frame(width: 70, height: 40)
+            .frame(width: 56, height: 40)
             .background(held ? PlayerStyle.cue : PlayerStyle.button, in: .rect(cornerRadius: 4))
             .overlay(RoundedRectangle(cornerRadius: 4).stroke(PlayerStyle.cue.opacity(0.6), lineWidth: 1))
             .opacity(deck.isLoaded ? 1 : 0.4)
@@ -237,7 +291,7 @@ private struct PlayButton: View {
             Image(systemName: deck.isPlaying ? "pause.fill" : "play.fill")
                 .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(deck.isPlaying ? PlayerStyle.playing : PlayerStyle.text)
-                .frame(width: 70, height: 40)
+                .frame(width: 56, height: 40)
                 .background(PlayerStyle.button, in: .rect(cornerRadius: 4))
                 .overlay(
                     RoundedRectangle(cornerRadius: 4)
@@ -317,7 +371,7 @@ private struct TempoFader: View {
     }
 }
 
-private struct PlayerChipStyle: ButtonStyle {
+struct PlayerChipStyle: ButtonStyle {
     let on: Bool
     var multiline = false
 

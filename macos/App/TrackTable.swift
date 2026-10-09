@@ -193,6 +193,19 @@ struct TrackTable: NSViewRepresentable {
                 autoLoaded = true
                 model.loadToDeck(trackID: row.id)
                 if env["RBXPORT_PLAY"] == "1" { model.player.deckA.playWhenLoaded() }
+                // RBXPORT_SEEK=<seconds> and RBXPORT_LOOP_BEATS=<n>: once the deck and its grid are
+                // ready, move the head there and start an n-beat loop, for screenshots.
+                if env["RBXPORT_SEEK"] != nil || env["RBXPORT_LOOP_BEATS"] != nil {
+                    let deck = model.player.deckA
+                    Task { @MainActor in
+                        for _ in 0..<400 where !(deck.isLoaded && !deck.beats.isEmpty && deck.detailBytes != nil) {
+                            try? await Task.sleep(for: .milliseconds(50))
+                        }
+                        if let text = env["RBXPORT_SEEK"], let seconds = Double(text) { deck.seek(toSeconds: seconds) }
+                        try? await Task.sleep(for: .milliseconds(800))
+                        if let text = env["RBXPORT_LOOP_BEATS"], let beats = Double(text) { deck.beatLoop(beats) }
+                    }
+                }
             }
             if !autoPreviewed, let text = env["RBXPORT_PREVIEW_ROW"], let n = Int(text), range.contains(n),
                 let row = pager.peek(at: n)

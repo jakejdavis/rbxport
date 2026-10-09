@@ -3,6 +3,7 @@ import Testing
 
 @testable import rbxport
 
+@Suite(.scratchDefaults)
 struct FilterStateTests {
     @Test func nothingTickedSendsNothing() {
         var state = FilterState()
@@ -79,6 +80,7 @@ struct FilterStateTests {
 }
 
 @MainActor
+@Suite(.scratchDefaults)
 struct FilterModelTests {
     private func ready(_ backend: MockBackend, store: ColumnLayoutStore = isolatedStore()) async -> AppModel {
         let model = AppModel(backend: backend, layoutStore: store)

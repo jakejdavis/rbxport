@@ -3,6 +3,7 @@ import Testing
 
 @testable import rbxport
 
+@Suite(.scratchDefaults)
 struct ColumnCatalogueTests {
     @Test func theCatalogueHasAllFortyColumns() {
         #expect(ColumnCatalogue.all.count == 40)

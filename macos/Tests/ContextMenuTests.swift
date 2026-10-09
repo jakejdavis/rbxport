@@ -4,6 +4,7 @@ import Testing
 @testable import rbxport
 
 @MainActor
+@Suite(.scratchDefaults)
 struct ContextMenuTests {
     private func items(_ rows: [MenuRow]) -> [MenuItemSpec] {
         rows.compactMap { if case .item(let item) = $0 { item } else { nil } }

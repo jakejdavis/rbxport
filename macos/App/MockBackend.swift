@@ -37,6 +37,12 @@ actor MockBackend: BackendProtocol {
     var artworkAnswers: [String: Data] = [:]
     var artworkDelay: Duration = .zero
     var waveformDelay: Duration = .zero
+    /// What the analysis reads answer per track, set by tests.
+    var beatAnswers: [String: [Beat]] = [:]
+    var cueAnswers: [String: [Cue]] = [:]
+    var phraseAnswers: [String: [Phrase]] = [:]
+    var vocalAnswers: [String: Data] = [:]
+    private(set) var analysisCalls: [String] = []
     private(set) var peakWaveformCalls = 0
     private(set) var peakArtworkCalls = 0
     private var activeArtworkCalls = 0
@@ -164,6 +170,12 @@ actor MockBackend: BackendProtocol {
     func setArtwork(_ data: Data, for id: String) { artworkAnswers[id] = data }
     func setArtworkDelay(_ delay: Duration) { artworkDelay = delay }
     func setWaveform(_ data: Data, for id: String) { waveformAnswers[id] = data }
+    func setAnalysis(for id: String, beats: [Beat] = [], cues: [Cue] = [], phrases: [Phrase] = [], vocals: Data = Data()) {
+        beatAnswers[id] = beats
+        cueAnswers[id] = cues
+        phraseAnswers[id] = phrases
+        vocalAnswers[id] = vocals
+    }
     func setWaveformDelay(_ delay: Duration) { waveformDelay = delay }
     func setDetail(_ details: TrackDetails, delay: Duration? = nil) {
         detailOverrides[details.id] = details
@@ -194,6 +206,23 @@ actor MockBackend: BackendProtocol {
         defer { activeWaveformCalls -= 1 }
         if waveformDelay > .zero { try? await Task.sleep(for: waveformDelay) }
         return waveformAnswers[id] ?? Data()
+    }
+
+    func trackBeats(id: String) async throws -> [Beat] {
+        analysisCalls.append("beats:\(id)")
+        return beatAnswers[id] ?? []
+    }
+    func trackCues(id: String) async throws -> [Cue] {
+        analysisCalls.append("cues:\(id)")
+        return cueAnswers[id] ?? []
+    }
+    func trackPhrases(id: String) async throws -> [Phrase] {
+        analysisCalls.append("phrases:\(id)")
+        return phraseAnswers[id] ?? []
+    }
+    func trackVocals(id: String) async throws -> Data {
+        analysisCalls.append("vocals:\(id)")
+        return vocalAnswers[id] ?? Data()
     }
 
     func artwork(id: String) async -> Data? {

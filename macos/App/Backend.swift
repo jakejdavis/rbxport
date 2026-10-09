@@ -32,6 +32,13 @@ protocol BackendProtocol: Sendable {
     func waveform(id: String, kind: WaveformKind) async throws -> Data
     /// The artwork image file, or nil (none, missing, or refused by the core).
     func artwork(id: String) async -> Data?
+    /// A track's beat grid (PQTZ offset applied); empty without an analysis.
+    func trackBeats(id: String) async throws -> [Beat]
+    /// A track's hot cues, memory cues and loops.
+    func trackCues(id: String) async throws -> [Cue]
+    func trackPhrases(id: String) async throws -> [Phrase]
+    /// One intensity byte per 46.44 ms where a voice was heard.
+    func trackVocals(id: String) async throws -> Data
     /// The decks and the preview player.
     var playback: any PlaybackEngine { get }
 }
@@ -115,6 +122,10 @@ actor Backend: BackendProtocol {
         try core.waveform(trackId: id, kind: kind)
     }
     func artwork(id: String) async -> Data? { core.artwork(trackId: id) }
+    func trackBeats(id: String) async throws -> [Beat] { try core.trackBeats(trackId: id) }
+    func trackCues(id: String) async throws -> [Cue] { try core.trackCues(trackId: id) }
+    func trackPhrases(id: String) async throws -> [Phrase] { try core.trackPhrases(trackId: id) }
+    func trackVocals(id: String) async throws -> Data { Data(try core.trackVocals(trackId: id)) }
 }
 
 func describe(_ error: Error) -> String {

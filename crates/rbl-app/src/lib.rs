@@ -25,6 +25,7 @@ pub mod player;
 pub mod preview;
 pub mod rx3_link;
 pub mod startup;
+pub mod track_data;
 pub mod state;
 
 pub use error::{set_internal_error_hook, AppError, AppResult, ErrorKind};

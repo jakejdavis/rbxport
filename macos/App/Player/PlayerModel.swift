@@ -14,10 +14,19 @@ final class PlayerModel {
     var panelOpen: Bool {
         didSet { if panelOpen != oldValue { defaults.set(panelOpen, forKey: "player.open") } }
     }
+    /// The deck panel's height in points, within `panelHeightRange`. Persisted.
+    var panelHeight: Double {
+        didSet { if panelHeight != oldValue { defaults.set(panelHeight, forKey: "player.height") } }
+    }
+    static let panelHeightRange = 300.0...520.0
+
     /// A transient message for the deck panel (the output could not open, a preview failed).
     private(set) var notice: String?
     /// The master meters as of the last update; the VU meters of the next slice read it.
     @ObservationIgnored private(set) var meters: Meters?
+    /// When `meters` arrived, on the player's clock, for the meters' fall.
+    @ObservationIgnored private(set) var metersAt: TimeInterval = 0
+    @ObservationIgnored private let now: () -> TimeInterval
 
     @ObservationIgnored private let backend: any BackendProtocol
     @ObservationIgnored private let defaults: UserDefaults
@@ -33,17 +42,23 @@ final class PlayerModel {
     ) {
         self.backend = backend
         self.defaults = defaults
+        self.now = now
         playback = backend.playback
         decks = [Deck.a, Deck.b].map {
-            DeckModel(deck: $0, playback: backend.playback, waveforms: waveforms, artworks: artwork, defaults: defaults, now: now)
+            DeckModel(
+                deck: $0, playback: backend.playback, waveforms: waveforms, artworks: artwork, backend: backend,
+                defaults: defaults, now: now)
         }
         preview = PreviewModel(playback: backend.playback, now: now)
         panelOpen = defaults.object(forKey: "player.open") as? Bool ?? true
+        panelHeight = min(max(defaults.object(forKey: "player.height") as? Double ?? 360, Self.panelHeightRange.lowerBound), Self.panelHeightRange.upperBound)
+        metronomeSound = min(max(defaults.object(forKey: "player.metronomeSound") as? Int ?? 2, 1), 3)
     }
 
     /// Starts carrying the engine's events to the decks.
     func start() {
         guard pump == nil else { return }
+        playback.setMetronomeSound(UInt8(metronomeSound))
         let events = playback.events
         pump = Task { [weak self] in
             for await event in events {
@@ -63,10 +78,11 @@ final class PlayerModel {
     func handle(_ event: PlaybackEvent) {
         switch event {
         case .tick(let tick, let at):
-            decks[0].apply(tick: tick.a, sampleRate: tick.sampleRate, at: at)
-            decks[1].apply(tick: tick.b, sampleRate: tick.sampleRate, at: at)
+            decks[0].apply(tick: tick.a, sampleRate: tick.sampleRate, at: at, shiftsKey: tick.shiftsKey)
+            decks[1].apply(tick: tick.b, sampleRate: tick.sampleRate, at: at, shiftsKey: tick.shiftsKey)
         case .meters(let m):
             meters = m
+            metersAt = now()
         case .deck(let e):
             deck(e.deck).handle(deckEvent: e)
             if let message = e.message, e.loadId == deck(e.deck).loadID { notice = "Could not load: \(message)" }
@@ -107,22 +123,43 @@ final class PlayerModel {
 
     // MARK: Keys
 
-    enum KeyCommand: Equatable { case togglePlay, cueDown, cueUp, swallow }
+    /// The metronome click, 1 to 3; F9 cycles 2, 3, 1. Remembered across launches.
+    private(set) var metronomeSound: Int {
+        didSet { defaults.set(metronomeSound, forKey: "player.metronomeSound") }
+    }
 
-    /// What a key event means to the player, or nil to pass it on. Space toggles play/pause on
-    /// deck A and C is the held CUE, unless a text field has focus. Modifier chords belong to
-    /// the menus (Shift is deck B, a later slice).
-    nonisolated static func command(
-        keyCode: UInt16, modifiers: NSEvent.ModifierFlags, isUp: Bool, isRepeat: Bool, typing: Bool
-    ) -> KeyCommand? {
-        guard modifiers.intersection([.command, .control, .option, .shift]).isEmpty else { return nil }
-        switch (keyCode, isUp) {
-        case (49, false): return typing ? nil : (isRepeat ? .swallow : .togglePlay)
-        case (49, true): return typing ? nil : .swallow
-        case (8, false): return typing ? nil : (isRepeat ? .swallow : .cueDown)
-        // Releasing CUE is honoured even when focus has moved to a text field.
-        case (8, true): return .cueUp
-        default: return nil
+    func cycleMetronomeSound() {
+        metronomeSound = metronomeSound == 3 ? 1 : metronomeSound == 2 ? 3 : 2
+        playback.setMetronomeSound(UInt8(metronomeSound))
+    }
+
+    /// Carries out a key's meaning on deck A.
+    func perform(_ action: PlayerKeyAction) {
+        let a = deckA
+        switch action {
+        case .togglePlay: a.togglePlay()
+        case .cueDown: a.cuePressed()
+        case .cueUp: a.cueReleased()
+        case .quantize: a.toggleQuantize()
+        case .memoryPrevious: a.callPreviousMemory()
+        case .memoryNext: a.callNextMemory()
+        case .memoryNumber(let n): a.callMemory(number: n)
+        case .hotCueDown(let letter): a.padPressed(letter)
+        case .hotCueUp: a.padReleased()
+        case .loopIn: a.markLoopIn()
+        case .loopOut: a.markLoopOut()
+        case .reloop: a.reloopOrExit()
+        case .beatLoop(let beats): a.beatLoop(beats)
+        case .loopHalve: a.halveLoop()
+        case .loopDouble: a.doubleLoop()
+        case .jump(let direction): a.jump(direction: direction)
+        case .zoom(let direction): a.zoom(direction: direction)
+        case .masterTempo: a.toggleMasterTempo()
+        case .tempoReset: a.resetTempo()
+        case .bpmUp: a.nudgeTempo(steps: 1)
+        case .bpmDown: a.nudgeTempo(steps: -1)
+        case .metronomeSound: cycleMetronomeSound()
+        case .swallow: break
         }
     }
 
@@ -135,11 +172,14 @@ final class PlayerModel {
             let consumed = MainActor.assumeIsolated { self.handleKey(event) }
             return consumed ? nil : event
         }
-        // Losing the keyboard mid-press must not leave CUE held.
+        // Losing the keyboard mid-press must not leave CUE or a pad held.
         resignObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.deckA.cueReleased() }
+            MainActor.assumeIsolated {
+                self?.deckA.cueReleased()
+                self?.deckA.padReleased()
+            }
         }
     }
 
@@ -153,17 +193,19 @@ final class PlayerModel {
     private func handleKey(_ event: NSEvent) -> Bool {
         let responder = event.window?.firstResponder
         let typing = responder is NSTextView || responder is NSTextField
-        guard
-            let command = Self.command(
-                keyCode: event.keyCode, modifiers: event.modifierFlags, isUp: event.type == .keyUp,
-                isRepeat: event.type == .keyDown && event.isARepeat, typing: typing)
-        else { return false }
-        switch command {
-        case .togglePlay: deckA.togglePlay()
-        case .cueDown: deckA.cuePressed()
-        case .cueUp: deckA.cueReleased()
-        case .swallow: break
+        // The sidebar's outline uses left and right to fold its folders.
+        if responder is NSOutlineView, event.keyCode == PlayerKeymap.left || event.keyCode == PlayerKeymap.right {
+            return false
         }
+        let chord = KeyChord(
+            character: event.charactersIgnoringModifiers?.lowercased() ?? "", keyCode: event.keyCode,
+            modifiers: event.modifierFlags)
+        guard
+            let action = PlayerKeymap.action(
+                for: chord, isUp: event.type == .keyUp, isRepeat: event.type == .keyDown && event.isARepeat,
+                typing: typing, loaded: deckA.isLoaded)
+        else { return false }
+        perform(action)
         return true
     }
 }

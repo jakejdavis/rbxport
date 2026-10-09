@@ -3,6 +3,7 @@ import Testing
 @testable import rbxport
 
 @MainActor
+@Suite(.scratchDefaults)
 struct AppModelTests {
     @Test func loadsSummaryTreeAndFirstView() async {
         let backend = MockBackend(trackCount: 300)

@@ -12,6 +12,15 @@ final class MockPlayback: PlaybackEngine, @unchecked Sendable {
         case seek(Deck, Double)
         case tempo(Deck, Float)
         case masterTempo(Deck, Bool)
+        case keyShift(Deck, Int8)
+        case loop(Deck, Double, Double)
+        case looping(Deck, Bool)
+        case clearLoop(Deck)
+        case scrubBegin(Deck)
+        case scrubTo(Deck, Double)
+        case scrubEnd(Deck)
+        case metronome(Deck, Bool)
+        case metronomeSound(UInt8)
         case previewPlay(String, Double, UInt64)
         case previewStop
     }
@@ -76,6 +85,15 @@ final class MockPlayback: PlaybackEngine, @unchecked Sendable {
     func seek(deck: Deck, ms: Double) { record(.seek(deck, ms)) }
     func setTempo(deck: Deck, tempo: Float) { record(.tempo(deck, tempo)) }
     func setMasterTempo(deck: Deck, on: Bool) { record(.masterTempo(deck, on)) }
+    func setKeyShift(deck: Deck, semitones: Int8) { record(.keyShift(deck, semitones)) }
+    func setLoop(deck: Deck, inMs: Double, outMs: Double) { record(.loop(deck, inMs, outMs)) }
+    func setLooping(deck: Deck, on: Bool) { record(.looping(deck, on)) }
+    func clearLoop(deck: Deck) { record(.clearLoop(deck)) }
+    func scrubBegin(deck: Deck) { record(.scrubBegin(deck)) }
+    func scrubTo(deck: Deck, ms: Double) { record(.scrubTo(deck, ms)) }
+    func scrubEnd(deck: Deck) { record(.scrubEnd(deck)) }
+    func setMetronome(deck: Deck, on: Bool) { record(.metronome(deck, on)) }
+    func setMetronomeSound(_ sound: UInt8) { record(.metronomeSound(sound)) }
     func state() -> PlaybackTick { Self.makeTick(a: Self.emptyDeck, b: Self.emptyDeck, sampleRate: 0) }
 
     func previewPlay(trackID: String, positionMs: Double, token: UInt64) {

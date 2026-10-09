@@ -11,9 +11,9 @@ use tauri::State;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::link::LinkStatusDto;
-use rbl_app::media::{waveform_bytes, window_of};
+use rbl_app::media::waveform_bytes;
 use crate::dto::{
-    cue_colour_css, AudioDeviceDto, AudioDevicesDto, CueDto, DeviceDto, ExportReportDto,
+    AudioDeviceDto, AudioDevicesDto, CueDto, DeviceDto, ExportReportDto,
     EditHistoryDto, ImportReportDto, LibrarySummaryDto, LimiterDto, MissingTrackDto, MissingTracksDto, PhraseDto, RowDto,
     TreeNodeDto, ViewHandleDto, ViewSpecDto,
     BackupDto, DeviceSyncStateDto, DuplicateGroupDto, DuplicateTrackDto, DuplicatesDto,
@@ -25,16 +25,6 @@ use crate::state::{AppState, LibraryEdit};
 
 pub use rbl_app::browse::MAX_ROWS;
 pub(crate) use rbl_app::edits::{apply_history, history_dto, refresh_after_edit, touched_by, write_error, Touched};
-
-/// Beats returned for one track. A four-minute track at 128 BPM has about 500
-/// and a three-hour mix around 23,000; this bounds the response without
-/// truncating any real grid.
-const MAX_BEATS: usize = 65_536;
-
-/// Phrases returned for one track. The longest song structure in the reference
-/// library has 457 [OBS] — a two-hour DJ mix — and every ordinary track is
-/// under fifty, so this bounds the response without truncating a real one.
-const MAX_PHRASES: usize = 512;
 
 /// Runs `f` on a blocking thread and converts a panic there into an `AppError`.
 pub(crate) async fn blocking<T, F>(name: &'static str, f: F) -> AppResult<T>
@@ -1280,22 +1270,9 @@ pub async fn track_beats(
     state: State<'_, Arc<AppState>>,
     track: String,
 ) -> AppResult<tauri::ipc::Response> {
-    let library = state.library()?;
-    let share = state.share_root();
+    let state = Arc::clone(&state);
     blocking("track_beats", move || {
-        let Some(row) = library.row_of(&track) else { return Ok(Vec::new()) };
-        let relative = library.analysis_path.get(row as usize);
-        if relative.is_empty() {
-            return Ok(Vec::new());
-        }
-        let beats = read_beat_grid(&share, relative);
-        let mut out: Vec<u8> = Vec::with_capacity(beats.len() * BEAT_BYTES);
-        for (time_ms, number, tempo_x100) in beats {
-            out.extend_from_slice(&time_ms.to_le_bytes());
-            out.push(number);
-            out.extend_from_slice(&tempo_x100.to_le_bytes());
-        }
-        Ok(out)
+        Ok(rbl_app::track_data::encode_beats(&rbl_app::track_data::track_beats(&state, &track)?))
     })
     .await
     .map(tauri::ipc::Response::new)
@@ -1305,27 +1282,12 @@ pub async fn track_beats(
 /// the bar (1 is the downbeat) and the tempo there x100, at most `MAX_BEATS`
 /// of them. Empty for a track without one.
 pub(crate) fn read_beat_grid(share: &std::path::Path, relative: &str) -> Vec<(u32, u8, u16)> {
-    let path = share.join(relative.trim_start_matches(['/', '\\']));
-    let Ok(bytes) = std::fs::read(&path) else { return Vec::new() };
-    let Ok(file) = rbl_anlz::parse(&bytes) else { return Vec::new() };
-    file.sections
-        .iter()
-        .find_map(rbl_anlz::Section::as_beat_grid)
-        .map(|beats| {
-            beats
-                .iter()
-                .take(MAX_BEATS)
-                .map(|beat| {
-                    (beat.time_ms, u8::try_from(beat.beat_number).unwrap_or(0), beat.tempo_x100)
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+    // The PQTZ grid offset is applied, as the editor and the drawn grid do.
+    rbl_app::track_data::read_beat_grid(share, relative)
+        .into_iter()
+        .map(|beat| (beat.time_ms, beat.number, beat.tempo_x100))
+        .collect()
 }
-
-/// Bytes one beat takes in that encoding: `u32` milliseconds, its number, then
-/// a `u16` of the tempo there x100.
-const BEAT_BYTES: usize = 7;
 
 /// Points a deck at a track and starts loading it.
 ///
@@ -1916,40 +1878,8 @@ pub async fn track_cues(
     state: State<'_, Arc<AppState>>,
     track: String,
 ) -> AppResult<Vec<CueDto>> {
-    let library = state.library()?;
-    let cue_state = Arc::clone(&state);
-    blocking("track_cues", move || {
-        const MEMORY_CSS: [&str; 8] = [
-            "#E778F1", "#E33122", "#EBA44A", "#F4E458",
-            "#66DD42", "#56BDF3", "#204FEF", "#8B1EEF",
-        ];
-        let Some(row) = library.row_of(&track) else { return Ok(Vec::new()) };
-        // Rekordbox may have added cues since the library snapshot was built.
-        // Refresh this track before reading its comments and colours so the
-        // panel and waveform see the same current set of cues.
-        let (comments, memory_colours) = cue_state.read_db(|db| {
-            rbl_index::reload_cues_of(db, &library, &track)?;
-            Ok((
-                rbl_db::details::cue_comments(db.connection(), &track)?,
-                rbl_db::details::memory_cue_colours(db.connection(), &track)?,
-            ))
-        }).map_err(write_error)?;
-        Ok(library
-            .cues_of(row)
-            .iter()
-            .map(|cue| CueDto {
-                comment: comments.get(&cue.id.to_string()).cloned().unwrap_or_default(),
-                id: if cue.id == 0 { String::new() } else { cue.id.to_string() },
-                position_ms: cue.position_ms,
-                out_ms: cue.out_ms,
-                letter: cue.hot_letter().map(String::from).unwrap_or_default(),
-                memory: cue.is_memory(),
-                colour: if cue.is_memory() {
-                    memory_colours.get(&cue.id.to_string()).and_then(|value| MEMORY_CSS.get(usize::from(*value))).map(|value| (*value).to_owned())
-                } else { cue_colour_css(cue.colour) },
-            })
-            .collect())
-    })
+    let state = Arc::clone(&state);
+    blocking("track_cues", move || rbl_app::track_data::track_cues(&state, &track))
     .await
 }
 
@@ -1964,41 +1894,8 @@ pub async fn track_phrases(
     state: State<'_, Arc<AppState>>,
     track: String,
 ) -> AppResult<Vec<PhraseDto>> {
-    let library = state.library()?;
-    let share = state.share_root();
-    blocking("track_phrases", move || {
-        let Some(row) = library.row_of(&track) else { return Ok(Vec::new()) };
-        let relative = library.analysis_path.get(row as usize);
-        if relative.is_empty() {
-            return Ok(Vec::new());
-        }
-        let dat = rbl_anlz::resolve(&share, relative);
-
-        let Ok(ext) = rbl_anlz::Anlz::read(&rbl_anlz::sibling(&dat, "EXT")) else {
-            // Not analysed for phrases, or the file is gone: draw no strip
-            // rather than fail the view.
-            return Ok(Vec::new());
-        };
-        let Some(phrases) = ext.phrases() else { return Ok(Vec::new()) };
-
-        // The grid is optional here. A phrase without a time is still worth
-        // returning, since its beat number is what the tag actually holds.
-        let grid = rbl_anlz::Anlz::read(&dat).ok().and_then(|d| d.beat_grid());
-
-        Ok(phrases
-            .into_iter()
-            .take(MAX_PHRASES)
-            .map(|phrase| PhraseDto {
-                beat: u32::from(phrase.beat),
-                label: phrase.label.to_owned(),
-                kind: phrase.kind,
-                // Beat numbers in `PSSI` are 1-based; the grid is a list.
-                time_ms: grid.as_ref().and_then(|g| {
-                    g.get(usize::from(phrase.beat).checked_sub(1)?).map(|b| b.time_ms)
-                }),
-            })
-            .collect())
-    })
+    let state = Arc::clone(&state);
+    blocking("track_phrases", move || rbl_app::track_data::track_phrases(&state, &track))
     .await
 }
 
@@ -2015,20 +1912,8 @@ pub async fn track_vocals(
     from: Option<u32>,
     len: Option<u32>,
 ) -> AppResult<tauri::ipc::Response> {
-    let library = state.library()?;
-    let share = state.share_root();
-    blocking("track_vocals", move || {
-        let Some(row) = library.row_of(&track) else { return Ok(Vec::new()) };
-        let relative = library.analysis_path.get(row as usize);
-        if relative.is_empty() {
-            return Ok(Vec::new());
-        }
-        let dat = rbl_anlz::resolve(&share, relative);
-        let Ok(two) = rbl_anlz::Anlz::read(&rbl_anlz::sibling(&dat, "2EX")) else {
-            return Ok(Vec::new());
-        };
-        Ok(window_of(two.vocals().unwrap_or_default(), 1, from, len))
-    })
+    let state = Arc::clone(&state);
+    blocking("track_vocals", move || rbl_app::track_data::track_vocals(&state, &track, from, len))
     .await
     .map(tauri::ipc::Response::new)
 }

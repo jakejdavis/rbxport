@@ -74,10 +74,13 @@ struct DetailView: View {
 
     var body: some View {
         @Bindable var model = model
-        VSplitView {
+        // Not a VSplitView: an AppKit view inside its first pane (the detail waveform) sends the
+        // split view's size constraints into an endless update. The divider is drawn here instead.
+        VStack(spacing: 0) {
             if model.player.panelOpen {
                 DeckPanel(deck: model.player.deckA, player: model.player, palette: model.waveformPalette)
-                    .frame(minHeight: 150, idealHeight: 188, maxHeight: 320)
+                    .frame(height: model.player.panelHeight)
+                PanelDivider(player: model.player)
             }
             VStack(spacing: 0) {
                 if model.filterBarOpen {
@@ -95,7 +98,7 @@ struct DetailView: View {
                 Divider()
                 StatusLine()
             }
-            .frame(minHeight: 160)
+            .frame(minHeight: 120)
         }
         .inspector(isPresented: $model.infoPanelOpen) {
             InfoPanelView(model: model.info)
@@ -136,5 +139,31 @@ struct StatusLine: View {
         .font(.caption)
         .foregroundStyle(.secondary)
         .padding(.horizontal, 10).padding(.vertical, 5)
+    }
+}
+
+
+/// The draggable edge under the deck panel.
+struct PanelDivider: View {
+    let player: PlayerModel
+    @State private var startHeight: Double?
+
+    var body: some View {
+        Rectangle()
+            .fill(Color(nsColor: .separatorColor))
+            .frame(height: 1)
+            .overlay {
+                Color.clear.frame(height: 9).contentShape(Rectangle())
+                    .onHover { inside in if inside { NSCursor.resizeUpDown.push() } else { NSCursor.pop() } }
+                    .gesture(
+                        DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                            .onChanged { value in
+                                let start = startHeight ?? player.panelHeight
+                                startHeight = start
+                                player.panelHeight = min(max(start + value.translation.height, PlayerModel.panelHeightRange.lowerBound), PlayerModel.panelHeightRange.upperBound)
+                            }
+                            .onEnded { _ in startHeight = nil })
+            }
+            .accessibilityLabel("Player size")
     }
 }

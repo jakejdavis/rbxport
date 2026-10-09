@@ -128,6 +128,9 @@ struct CueMachine: Equatable, Sendable {
         return [.seek(cueMs), .pause]
     }
 
+    /// Calling a memory cue makes it the cue point.
+    mutating func moveCuePoint(to ms: Double) { cueMs = max(0, ms) }
+
     /// PLAY pressed while CUE is held latches the deck playing: releasing CUE then does nothing.
     mutating func latch() { held = false }
 }
