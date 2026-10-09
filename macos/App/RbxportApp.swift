@@ -30,15 +30,27 @@ struct RbxportApp: App {
             store = ColumnLayoutStore(defaults: defaults)
         }
         let appModel = AppModel(backend: backend, layoutStore: store)
+        if !isUnderTest {
+            // Only a plain launch may set AppleLanguages (when the user changes the language); a launch
+            // with a scratch defaults suite or a fixture library is a dev launch and must not.
+            let plain = env["RBXPORT_DEFAULTS_SUITE"] == nil && env["RBXPORT_FIXTURE_DIR"] == nil
+            L10n.follow(appModel.prefs, writesAppleLanguages: plain)
+        }
         _model = State(initialValue: appModel)
         // AppleScript reaches the app through this; tests make their own host.
         if !isUnderTest { ScriptHost.install(model: appModel) }
+    }
+
+    /// SwiftUI literals localise from this; the helper follows the same preference.
+    private var uiLocale: Locale {
+        L10n.choices.first { $0.code == model.prefs.locale }?.locale ?? Locale(identifier: "en")
     }
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environment(model)
+                .environment(\.locale, uiLocale)
                 .frame(minWidth: 980, minHeight: 640)
                 .task {
                     guard !isUnderTest else { return }
@@ -54,14 +66,17 @@ struct RbxportApp: App {
         Window("Sync Manager", id: SyncManagerScene.id) {
             SyncManagerView(model: model.syncManager, devices: model.devices, jobs: model.exportJobs)
                 .environment(model)
+                .environment(\.locale, uiLocale)
         }
         .defaultSize(width: 900, height: 560)
         Window("Report a Problem", id: BugReportScene.id) {
             BugReportView(model: model.bugReport)
+                .environment(\.locale, uiLocale)
         }
         .defaultSize(width: 620, height: 600)
         Settings {
             SettingsView(model: model)
+                .environment(\.locale, uiLocale)
         }
     }
 

@@ -241,8 +241,8 @@ final class SyncManagerModel {
         if let error = report.error { return error }
         if report.ejected { return "Safely ejected." }
         if let reason = report.ejectError { return "Not ejected: \(reason)" }
-        guard let done = report.report else { return "Sync complete." }
-        return done.skipped.isEmpty ? "Sync complete." : "Sync complete; \(done.skipped.count) skipped (audio missing)."
+        guard let done = report.report else { return L10n.t("Sync complete.") }
+        return done.skipped.isEmpty ? L10n.t("Sync complete.") : "Sync complete; \(done.skipped.count) skipped (audio missing)."
     }
 
     func name(of path: String) -> String {
@@ -408,7 +408,7 @@ struct SyncManagerView: View {
             Button {
                 Task { await model.sync() }
             } label: {
-                Label(model.isSyncing ? "Syncing\u{2026}" : "Sync", systemImage: "arrow.right.circle.fill")
+                Label(model.isSyncing ? L10n.t("Syncing\u{2026}") : L10n.t("Sync"), systemImage: "arrow.right.circle.fill")
             }
             .buttonStyle(.borderedProminent)
             .disabled(!model.canSync)

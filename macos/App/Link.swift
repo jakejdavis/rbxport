@@ -150,23 +150,23 @@ final class LinkModel {
 
     /// Hover text for the LINK button.
     var buttonHelp: String {
-        if isBlocked { return "PRO DJ LINK is unavailable. Click to see why." }
-        if isOn { return "PRO DJ LINK is on. Players on the network can browse and play this library. Click to turn it off." }
+        if isBlocked { return L10n.t("PRO DJ LINK is unavailable. Click to see why.") }
+        if isOn { return L10n.t("PRO DJ LINK is on. Players on the network can browse and play this library. Click to turn it off.") }
         let count = otherDevices.count
         return count == 1
-            ? "1 device on the network. Turn PRO DJ LINK on to serve this library to it."
+            ? L10n.t("1 device on the network. Turn PRO DJ LINK on to serve this library to it.")
             : "\(count) devices on the network. Turn PRO DJ LINK on to serve this library to them."
     }
 
     /// The pane's headline for the connection.
     var statusLabel: String {
-        guard let status else { return error == nil ? "Checking connection\u{2026}" : "Unavailable" }
-        if !status.on { return "Disconnected" }
+        guard let status else { return error == nil ? L10n.t("Checking connection\u{2026}") : L10n.t("Unavailable") }
+        if !status.on { return L10n.t("Disconnected") }
         switch status.state {
-        case .up: return "Connected"
-        case .waiting: return "Waiting for devices"
-        case .down: return "Connection lost"
-        default: return "Connecting\u{2026}"
+        case .up: return L10n.t("Connected")
+        case .waiting: return L10n.t("Waiting for devices")
+        case .down: return L10n.t("Connection lost")
+        default: return L10n.t("Connecting\u{2026}")
         }
     }
 
@@ -309,7 +309,7 @@ final class LinkModel {
         ],
         interfaces: [
             LinkInterface(name: "en5", address: "192.168.1.20", adapter: "USB 10/100/1000 LAN", connection: .wired),
-            LinkInterface(name: "en0", address: "192.168.1.14", adapter: "Wi-Fi", connection: .wireless),
+            LinkInterface(name: "en0", address: "192.168.1.14", adapter: L10n.t("Wi-Fi"), connection: .wireless),
         ],
         master: false, masterBpm: 124.0, state: .up, number: 17)
 }

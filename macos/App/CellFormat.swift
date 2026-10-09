@@ -55,7 +55,7 @@ enum CellFormat {
     }
 
     static func color(_ value: UInt8) -> String {
-        value > 0 && Int(value) <= colorNames.count ? colorNames[Int(value) - 1] : ""
+        value > 0 && Int(value) <= colorNames.count ? L10n.t(colorNames[Int(value) - 1]) : ""
     }
 
     /// A positive number as text; zero is blank (disc, year, play count...).

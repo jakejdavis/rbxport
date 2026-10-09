@@ -14,30 +14,30 @@ struct InfoEditForm: View {
     var body: some View {
         Form {
             Section("Track") {
-                InfoTextField(label: "Track Title", value: details.title, commit: commit(.title))
-                InfoTextField(label: "Artist", value: details.artist, commit: commit(.artist))
-                InfoTextField(label: "Album", value: details.album, commit: commit(.album))
-                InfoFixed(label: "Album Artist", value: details.albumArtist)
-                InfoTextField(label: "Original Artist", value: details.originalArtist, commit: commit(.originalArtist))
-                InfoTextField(label: "Composer", value: details.composer, commit: commit(.composer))
-                InfoTextField(label: "Lyricist", value: details.lyricist, commit: commit(.lyricist))
-                InfoTextField(label: "Remixer", value: details.remixer, commit: commit(.remixer))
-                InfoFixed(label: "Mix Name", value: details.mixName)
-                InfoTextField(label: "Label", value: details.label, commit: commit(.label))
-                InfoTextField(label: "Genre", value: details.genre, commit: commit(.genre))
+                InfoTextField(label: L10n.t("Track Title"), value: details.title, commit: commit(.title))
+                InfoTextField(label: L10n.t("Artist"), value: details.artist, commit: commit(.artist))
+                InfoTextField(label: L10n.t("Album"), value: details.album, commit: commit(.album))
+                InfoFixed(label: L10n.t("Album Artist"), value: details.albumArtist)
+                InfoTextField(label: L10n.t("Original Artist"), value: details.originalArtist, commit: commit(.originalArtist))
+                InfoTextField(label: L10n.t("Composer"), value: details.composer, commit: commit(.composer))
+                InfoTextField(label: L10n.t("Lyricist"), value: details.lyricist, commit: commit(.lyricist))
+                InfoTextField(label: L10n.t("Remixer"), value: details.remixer, commit: commit(.remixer))
+                InfoFixed(label: L10n.t("Mix Name"), value: details.mixName)
+                InfoTextField(label: L10n.t("Label"), value: details.label, commit: commit(.label))
+                InfoTextField(label: L10n.t("Genre"), value: details.genre, commit: commit(.genre))
             }
             Section("Musical") {
-                InfoFixed(label: "BPM", value: CellFormat.bpm(details.bpmX100))
+                InfoFixed(label: L10n.t("BPM"), value: CellFormat.bpm(details.bpmX100))
                 KeyPicker(selected: details.key, keys: model.lookups?.keys ?? [], commit: commit(.key))
-                InfoTextField(label: "Year", value: details.year > 0 ? String(details.year) : "", numeric: true, commit: commit(.year))
-                InfoFixed(label: "Release Date", value: CellFormat.shortDate(details.releaseDate))
+                InfoTextField(label: L10n.t("Year"), value: details.year > 0 ? String(details.year) : "", numeric: true, commit: commit(.year))
+                InfoFixed(label: L10n.t("Release Date"), value: CellFormat.shortDate(details.releaseDate))
                 InfoTextField(
                     label: "Track Number", value: details.trackNumber > 0 ? String(details.trackNumber) : "", numeric: true,
                     commit: commit(.trackNumber))
                 InfoTextField(
                     label: "Disc Number", value: details.discNumber > 0 ? String(details.discNumber) : "", numeric: true,
                     commit: commit(.discNumber))
-                InfoFixed(label: "Time", value: CellFormat.duration(details.durationSec))
+                InfoFixed(label: L10n.t("Time"), value: CellFormat.duration(details.durationSec))
             }
             Section("Library") {
                 LabeledContent("Rating") {
@@ -49,16 +49,16 @@ struct InfoEditForm: View {
                     ColorChoice(selected: UInt8(details.color) ?? 0) { color in Task { await model.edit(.color(color)) } }
                 }
                 InfoTextField(
-                    label: "DJ Play Count", value: String(details.playCount), numeric: true, commit: commit(.playCount))
-                InfoFixed(label: "My Tag", value: details.myTags.compactMap { model.myTagNames[$0] }.joined(separator: ", "))
+                    label: L10n.t("DJ Play Count"), value: String(details.playCount), numeric: true, commit: commit(.playCount))
+                InfoFixed(label: L10n.t("My Tag"), value: details.myTags.compactMap { model.myTagNames[$0] }.joined(separator: ", "))
                 InfoTextField(
-                    label: "Comments", value: details.comment, multiline: true,
+                    label: L10n.t("Comments"), value: details.comment, multiline: true,
                     commit: { value in Task { await model.edit(.comment(value)) } })
-                InfoFixed(label: "Message", value: details.message)
-                InfoFixed(label: "Auto load HotCue on CDJ/XDJ", value: details.hotCueAutoLoad ? "Yes" : "No")
-                InfoFixed(label: "Publish track information", value: details.publish ? "Yes" : "No")
+                InfoFixed(label: L10n.t("Message"), value: details.message)
+                InfoFixed(label: "Auto load HotCue on CDJ/XDJ", value: details.hotCueAutoLoad ? L10n.t("Yes") : L10n.t("No"))
+                InfoFixed(label: L10n.t("Publish track information"), value: details.publish ? L10n.t("Yes") : L10n.t("No"))
             }
-            ForEach(InfoFormat.infoSections(details, myTagNames: model.myTagNames).filter { $0.title == "File" }, id: \.title) { section in
+            ForEach(InfoFormat.infoSections(details, myTagNames: model.myTagNames).filter { $0.title == L10n.t("File") }, id: \.title) { section in
                 Section(section.title) { ForEach(section.facts, id: \.label) { InfoFixed(label: $0.label, value: $0.value) } }
             }
         }

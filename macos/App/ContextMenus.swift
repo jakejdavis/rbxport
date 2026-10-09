@@ -70,10 +70,15 @@ enum MenuRow: Equatable {
 
 enum ContextMenus {
     private static func grey(_ title: String, _ submenu: [MenuRow]? = nil) -> MenuRow {
-        .item(MenuItemSpec(title: title, command: nil, submenu: submenu))
+        .item(MenuItemSpec(title: L10n.t(title), command: nil, submenu: submenu))
     }
 
     private static func live(_ title: String, _ command: MenuCommand) -> MenuRow {
+        .item(MenuItemSpec(title: L10n.t(title), command: command, submenu: nil))
+    }
+
+    /// An entry named after something of the user's (a playlist, a device): never translated.
+    private static func named(_ title: String, _ command: MenuCommand) -> MenuRow {
         .item(MenuItemSpec(title: title, command: command, submenu: nil))
     }
 
@@ -113,7 +118,7 @@ enum ContextMenus {
         var rows: [MenuRow] = [
             .item(
                 MenuItemSpec(
-                    title: "Load", command: nil,
+                    title: L10n.t("Load"), command: nil,
                     submenu: [
                         context.selectionCount == 1 ? live("Load track to player 1", .loadToDeck(.a)) : grey("Load track to player 1"),
                         context.selectionCount == 1 ? live("Load track to player 2", .loadToDeck(.b)) : grey("Load track to player 2"),
@@ -123,7 +128,7 @@ enum ContextMenus {
             edit("Analyze Track", .analyse),
             .item(
                 MenuItemSpec(
-                    title: "Analysis Lock", command: nil,
+                    title: L10n.t("Analysis Lock"), command: nil,
                     submenu: [edit("On", .analysisLock(true)), edit("Off", .analysisLock(false))])),
             .separator,
             addToPlaylist(context),
@@ -163,8 +168,8 @@ enum ContextMenus {
         guard context.selectionCount > 0, !context.allLoose, !context.devices.isEmpty else { return grey("Export Track", []) }
         return .item(
             MenuItemSpec(
-                title: "Export Track", command: nil,
-                submenu: context.devices.map { live($0.name, .exportTrackToDevice($0.path)) }))
+                title: L10n.t("Export Track"), command: nil,
+                submenu: context.devices.map { named($0.name, .exportTrackToDevice($0.path)) }))
     }
 
     /// "Export Playlist ▸ device": one entry per mounted device.
@@ -172,8 +177,8 @@ enum ContextMenus {
         guard !devices.isEmpty else { return grey("Export Playlist", []) }
         return .item(
             MenuItemSpec(
-                title: "Export Playlist", command: nil,
-                submenu: devices.map { live($0.name, .exportToDevice($0.path)) }))
+                title: L10n.t("Export Playlist"), command: nil,
+                submenu: devices.map { named($0.name, .exportToDevice($0.path)) }))
     }
 
     /// "Color ▸": none, then the eight colours, each with its dot.
@@ -185,7 +190,7 @@ enum ContextMenus {
                     title: TrackColors.name(color), command: enabled ? .setColor(color) : nil, submenu: nil,
                     colorDot: color))
         }
-        return .item(MenuItemSpec(title: "Color", command: nil, submenu: enabled ? items : []))
+        return .item(MenuItemSpec(title: L10n.t("Color"), command: nil, submenu: enabled ? items : []))
     }
 
     /// "Add To Playlist ▸": every ordinary playlist as `Folder › Playlist`, live for a selection.
@@ -193,8 +198,8 @@ enum ContextMenus {
         guard context.editable, context.selectionCount > 0 else { return grey("Add To Playlist", []) }
         return .item(
             MenuItemSpec(
-                title: "Add To Playlist", command: nil,
-                submenu: context.playlists.map { live($0.title, .addToPlaylist($0.id)) }))
+                title: L10n.t("Add To Playlist"), command: nil,
+                submenu: context.playlists.map { named($0.title, .addToPlaylist($0.id)) }))
     }
 
     // MARK: Tree nodes
@@ -249,10 +254,10 @@ enum ContextMenus {
                 .separator,
                 .item(
                     MenuItemSpec(
-                        title: "Export a playlist to a file", command: nil,
+                        title: L10n.t("Export a playlist to a file"), command: nil,
                         submenu: [
-                            live("m3u8", .exportPlaylist(.m3u8)),
-                            live("txt", .exportPlaylist(.txt)),
+                            named("m3u8", .exportPlaylist(.m3u8)),
+                            named("txt", .exportPlaylist(.txt)),
                         ])),
                 .separator,
                 grey("Add To Shortcut"),

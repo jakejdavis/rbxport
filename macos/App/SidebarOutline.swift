@@ -63,8 +63,14 @@ struct SidebarOutline: NSViewRepresentable {
 
         init(model: AppModel) { self.model = model }
 
+        private var shownLanguage = L10n.current
+
         func update(version: Int, selectedID: String?) {
-            if version != shownVersion { reload() } else { syncSelection() }
+            _ = L10n.revision.value
+            if version != shownVersion || L10n.current != shownLanguage {
+                shownLanguage = L10n.current
+                reload()
+            } else { syncSelection() }
             if let id = sidebar.renameRequest {
                 // After this update: starting an edit changes first responder and layout.
                 DispatchQueue.main.async { [weak self] in
@@ -529,7 +535,7 @@ final class SidebarCellView: NSTableCellView {
 
     @MainActor
     func show(_ node: SidebarNode, count shown: UInt32?) {
-        label.stringValue = node.name
+        label.stringValue = node.displayName
         if node.isSection { return }
         icon.image = NSImage(systemSymbolName: node.symbol, accessibilityDescription: nil)
         label.textColor = node.kind == .note ? .tertiaryLabelColor : .labelColor

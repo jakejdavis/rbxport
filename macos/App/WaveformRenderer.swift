@@ -8,9 +8,9 @@ enum WaveformPalette: String, CaseIterable, Sendable, Codable {
 
     var label: String {
         switch self {
-        case .bands: "3 Band"
-        case .mono: "Blue"
-        case .colour: "RGB"
+        case .bands: L10n.t("3Band")
+        case .mono: L10n.t("Blue")
+        case .colour: L10n.t("RGB")
         }
     }
 

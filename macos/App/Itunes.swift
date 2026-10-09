@@ -188,7 +188,7 @@ final class ItunesModel {
     var selectedPlaylists: [String] { allRows.filter { !$0.isFolder && ticked.contains($0.id) }.map(\.id) }
 
     var selectionText: String {
-        guard library != nil else { return "No iTunes library" }
+        guard library != nil else { return L10n.t("No iTunes library") }
         return "\(selectedPlaylists.count) of \(playlistCount) playlists selected"
     }
 
@@ -317,7 +317,7 @@ struct ItunesPanelView: View {
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }
             Spacer()
-            Button(model.library == nil ? "Choose\u{2026}" : "Change\u{2026}") { Task { await model.choose() } }
+            Button(model.library == nil ? L10n.t("Choose\u{2026}") : L10n.t("Change\u{2026}")) { Task { await model.choose() } }
                 .disabled(model.isLoading || model.isImporting)
                 .accessibilityIdentifier("itunes-choose")
         }
@@ -419,7 +419,7 @@ struct ItunesPanelView: View {
             Button {
                 Task { await model.importSelected() }
             } label: {
-                Label(model.isImporting ? "Importing\u{2026}" : "Import", systemImage: "square.and.arrow.down")
+                Label(model.isImporting ? L10n.t("Importing\u{2026}") : L10n.t("Import"), systemImage: "square.and.arrow.down")
             }
             .buttonStyle(.borderedProminent)
             .disabled(!model.canImport(canEdit: canEdit))

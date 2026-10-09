@@ -44,10 +44,10 @@ final class BackupsModel {
     var statusText: String? {
         guard let progress, progress.running else { return nil }
         switch progress.phase {
-        case .stopping: return "Removing the unfinished backup\u{2026}"
-        case .compressing: return "Finishing your compressed ZIP backup."
-        case .validating: return "Checking the saved files before finishing."
-        default: return "Backing up your library"
+        case .stopping: return L10n.t("Removing the unfinished backup\u{2026}")
+        case .compressing: return L10n.t("Finishing your compressed ZIP backup.")
+        case .validating: return L10n.t("Checking the saved files before finishing.")
+        default: return L10n.t("Backing up your library")
         }
     }
 
@@ -94,7 +94,7 @@ final class BackupsModel {
             error = new.error ?? "The backup failed."
         case .cancelled:
             error = nil
-            notify("Backup stopped.")
+            notify(L10n.t("Backup stopped."))
             Task { await refreshList() }
         default: break
         }
@@ -138,7 +138,7 @@ final class BackupsModel {
     /// Choose default backup folder. Existing archives stay where they are.
     func chooseDirectory() async {
         guard !isRunning else {
-            error = "Wait for the current backup to finish before changing its folder."
+            error = L10n.t("Wait for the current backup to finish before changing its folder.")
             return
         }
         guard let url = await dialogs().chooseFolder("Choose default backup folder") else { return }
@@ -187,12 +187,12 @@ final class BackupsModel {
     nonisolated static func relativeText(_ backup: BackupInfo, now: Date = Date()) -> String {
         let seconds = max(0, now.timeIntervalSince(date(backup)))
         let minutes = Int(seconds / 60)
-        if minutes < 1 { return "just now" }
-        if minutes < 60 { return "\(minutes) minute\(minutes == 1 ? "" : "s") ago" }
+        if minutes < 1 { return L10n.t("just now") }
+        if minutes < 60 { return L10n.t(minutes == 1 ? "{count} minute ago" : "{count} minutes ago", ["count": minutes]) }
         let hours = minutes / 60
-        if hours < 24 { return "\(hours) hour\(hours == 1 ? "" : "s") ago" }
+        if hours < 24 { return L10n.t(hours == 1 ? "{count} hour ago" : "{count} hours ago", ["count": hours]) }
         let days = hours / 24
-        return "\(days) day\(days == 1 ? "" : "s") ago"
+        return L10n.t(days == 1 ? "{count} day ago" : "{count} days ago", ["count": days])
     }
 }
 
@@ -221,7 +221,7 @@ struct BackupsSection: View {
 
             if model.isRunning {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(model.statusText ?? "Backing up your library").font(.headline)
+                    Text(model.statusText ?? L10n.t("Backing up your library")).font(.headline)
                     if let fraction = model.fraction {
                         ProgressView(value: fraction)
                     } else {
@@ -233,7 +233,7 @@ struct BackupsSection: View {
                             Text(item).lineLimit(1).truncationMode(.middle)
                         }
                         Spacer()
-                        Button(model.isStopping ? "Stopping\u{2026}" : "Stop backup") { Task { await model.cancel() } }
+                        Button(model.isStopping ? L10n.t("Stopping\u{2026}") : L10n.t("Stop backup")) { Task { await model.cancel() } }
                             .disabled(model.isStopping)
                     }
                     .font(.caption).foregroundStyle(.secondary)

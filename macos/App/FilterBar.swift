@@ -43,7 +43,7 @@ struct FilterBar: View {
     private var bpmColumn: some View {
         HStack(alignment: .top, spacing: 8) {
             PickColumn(
-                title: "BPM", enabled: $model.filterState.bpm.enabled, picked: model.filterState.bpm.picked,
+                title: L10n.t("BPM"), enabled: $model.filterState.bpm.enabled, picked: model.filterState.bpm.picked,
                 options: (values?.bpms ?? []).map { FilterOption(value: $0.value, label: String($0.value), count: $0.count) },
                 width: 96, onPick: { model.filterState.bpm.pick($0, toggle: $1) })
             let applies = model.filterState.toleranceApplies(masterBPMx100: nil)
@@ -59,7 +59,7 @@ struct FilterBar: View {
     private var keyColumn: some View {
         let style = model.keyStyle
         return PickColumn(
-            title: "KEY", enabled: $model.filterState.key.enabled, picked: model.filterState.key.picked,
+            title: L10n.t("KEY"), enabled: $model.filterState.key.enabled, picked: model.filterState.key.picked,
             options: FilterKeyOrder.sorted(values?.keys ?? []).map {
                 FilterOption(value: $0.value, label: CellFormat.key($0.value, style: style), count: $0.count)
             },
@@ -68,7 +68,7 @@ struct FilterBar: View {
 
     private var ratingColumn: some View {
         PickColumn(
-            title: "RATING", enabled: $model.filterState.rating.enabled, picked: model.filterState.rating.picked,
+            title: L10n.t("RATING"), enabled: $model.filterState.rating.enabled, picked: model.filterState.rating.picked,
             showsAll: false,
             options: FilterState.ratings.map { FilterOption(value: $0, label: Self.stars($0), count: nil) },
             width: 96, onPick: { model.filterState.rating.pick($0, toggle: $1) })
@@ -76,9 +76,9 @@ struct FilterBar: View {
 
     private var colorColumn: some View {
         PickColumn(
-            title: "COLOR", enabled: $model.filterState.color.enabled, picked: model.filterState.color.picked,
+            title: L10n.t("COLOR"), enabled: $model.filterState.color.enabled, picked: model.filterState.color.picked,
             showsAll: false,
-            options: FilterState.colorNames.map { FilterOption(value: $0, label: $0, count: nil, dot: Self.dot($0)) },
+            options: FilterState.colorNames.map { FilterOption(value: $0, label: L10n.t($0), count: nil, dot: Self.dot($0)) },
             width: 110, onPick: { model.filterState.color.pick($0, toggle: $1) })
     }
 
@@ -135,7 +135,7 @@ struct PickColumn<Value: Hashable & Sendable>: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if showsAll {
-                        row(label: "All", count: nil, dot: nil, selected: picked.isEmpty) { onPick(nil, false) }
+                        row(label: L10n.t("All"), count: nil, dot: nil, selected: picked.isEmpty) { onPick(nil, false) }
                     }
                     ForEach(options) { option in
                         row(label: option.label, count: option.count, dot: option.dot, selected: picked.contains(option.value)) {

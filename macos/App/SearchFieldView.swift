@@ -10,20 +10,20 @@ extension SearchField {
 
     var label: String {
         switch self {
-        case .all: "All"
+        case .all: L10n.t("All")
         case .title: "Title"
-        case .artist: "Artist"
-        case .album: "Album"
-        case .genre: "Genre"
-        case .year: "Year"
-        case .bpm: "BPM"
-        case .composer: "Composer"
-        case .albumArtist: "Album Artist"
-        case .remixer: "Remixer"
-        case .label: "Label"
-        case .comment: "Comments"
-        case .originalArtist: "Original Artist"
-        case .mixName: "Mix Name"
+        case .artist: L10n.t("Artist")
+        case .album: L10n.t("Album")
+        case .genre: L10n.t("Genre")
+        case .year: L10n.t("Year")
+        case .bpm: L10n.t("BPM")
+        case .composer: L10n.t("Composer")
+        case .albumArtist: L10n.t("Album Artist")
+        case .remixer: L10n.t("Remixer")
+        case .label: L10n.t("Label")
+        case .comment: L10n.t("Comments")
+        case .originalArtist: L10n.t("Original Artist")
+        case .mixName: L10n.t("Mix Name")
         }
     }
 }

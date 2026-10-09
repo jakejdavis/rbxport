@@ -50,6 +50,7 @@ enum PreferencePane: String, CaseIterable, Sendable {
 /// Every stored name. The dotted ones are React's (`src/lib/preferences.ts`); `legacy` names are what
 /// phases 2 to 5 stored before the store existed. They are read once, on migration, and left in place.
 enum PrefKeys {
+    static let locale = "view.locale"
     static let keyDisplay = "view.keyDisplay"
     static let waveformColor = "view.waveformColor"
     static let playlistCounts = "view.playlistCounts"
@@ -116,6 +117,8 @@ final class PreferencesStore {
     @ObservationIgnored private var listeners: [@MainActor (String) -> Void] = []
 
     // View
+    /// The UI language, a React locale code (`en`, `de`, `zh-CN`, ...). Anything else reads as `en`.
+    var locale = "en" { didSet { changed(PrefKeys.locale, locale != oldValue, locale) } }
     var keyDisplay: KeyStyle = .classic { didSet { changed(PrefKeys.keyDisplay, keyDisplay != oldValue, Self.name(of: keyDisplay)) } }
     var waveformColor: WaveformPalette = .bands { didSet { changed(PrefKeys.waveformColor, waveformColor != oldValue, Self.name(of: waveformColor)) } }
     var playlistCounts = false { didSet { changed(PrefKeys.playlistCounts, playlistCounts != oldValue, playlistCounts) } }
@@ -206,6 +209,7 @@ final class PreferencesStore {
         loading = true
         defer { loading = false }
         let d = defaults
+        locale = d.string(forKey: PrefKeys.locale).flatMap { code in L10n.choices.contains { $0.code == code } ? code : nil } ?? "en"
         keyDisplay = Self.pick(d.string(forKey: PrefKeys.keyDisplay), Self.keyDisplayNames, else: .classic)
         waveformColor = Self.pick(d.string(forKey: PrefKeys.waveformColor), Self.waveformNames, else: .bands)
         playlistCounts = Self.bool(d, PrefKeys.playlistCounts, false)
@@ -302,6 +306,7 @@ final class PreferencesStore {
     func reset(_ pane: PreferencePane) {
         switch pane {
         case .view:
+            locale = "en"
             keyDisplay = .classic
             waveformColor = .bands
             playlistCounts = false

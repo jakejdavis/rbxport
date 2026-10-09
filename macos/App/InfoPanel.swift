@@ -7,9 +7,9 @@ enum InfoTab: String, CaseIterable, Sendable {
 
     var label: String {
         switch self {
-        case .summary: "Summary"
+        case .summary: L10n.t("Summary")
         case .info: "Info"
-        case .artwork: "Artwork"
+        case .artwork: L10n.t("Artwork")
         }
     }
 }
@@ -297,8 +297,8 @@ struct SummaryTab: View {
                     ForEach(InfoFormat.summaryFacts(row: model.row, details: model.details), id: \.label) { fact in
                         GridRow {
                             Text(fact.label).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
-                            Text(fact.value).textSelection(.enabled).lineLimit(fact.label == "Location" ? 4 : 1)
-                                .truncationMode(fact.label == "Location" ? .middle : .tail)
+                            Text(fact.value).textSelection(.enabled).lineLimit(fact.label == L10n.t("Location") ? 4 : 1)
+                                .truncationMode(fact.label == L10n.t("Location") ? .middle : .tail)
                         }
                     }
                 }

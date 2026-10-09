@@ -71,23 +71,23 @@ struct AppCommands: Commands {
     var body: some Commands {
         // File
         CommandGroup(replacing: .newItem) {
-            Menu("Import") {
-                item("Track\u{2026}", .importTracks) { Task { await model.importFromPanel(folders: false) } }
+            Menu(L10n.t("Import")) {
+                item(L10n.t("Track\u{2026}"), .importTracks) { Task { await model.importFromPanel(folders: false) } }
                     .disabled(!state.importEnabled)
-                item("Folder\u{2026}", .importFolder) { Task { await model.importFromPanel(folders: true) } }
+                item(L10n.t("Import Folder\u{2026}"), .importFolder) { Task { await model.importFromPanel(folders: true) } }
                     .disabled(!state.importEnabled)
-                Button("rekordbox XML\u{2026}") { Task { await model.importXMLFromPanel() } }
+                Button(L10n.t("Import rekordbox xml\u{2026}")) { Task { await model.importXMLFromPanel() } }
                     .disabled(!state.importEnabled)
                 // Browsing the Music library writes nothing; only its Import button needs editing.
-                Button("iTunes Library XML\u{2026}") { Task { await model.openItunesFromPanel() } }
+                Button(L10n.t("Import iTunes Library xml\u{2026}")) { Task { await model.openItunesFromPanel() } }
                 Button("USB Device\u{2026}") { model.openUsbImportFromMenu() }
                     .disabled(!state.usbImportEnabled)
             }
             Divider()
-            item("Sync Manager\u{2026}", .syncManager) { model.openSyncManager() }
+            item(L10n.t("Sync Manager\u{2026}"), .syncManager) { model.openSyncManager() }
             Divider()
-            Button("Missing File Manager\u{2026}") { model.openMissingFiles() }
-            Button("Find Duplicates\u{2026}") { model.openDuplicates() }
+            Button(L10n.t("Missing File Manager\u{2026}")) { model.openMissingFiles() }
+            Button(L10n.t("Find duplicates\u{2026}")) { model.openDuplicates() }
         }
 
         // Edit
@@ -105,72 +105,72 @@ struct AppCommands: Commands {
 
         // View
         CommandGroup(after: .sidebar) {
-            Menu("Layout") {
+            Menu(L10n.t("Layout")) {
                 ForEach(PlayerLayout.allCases) { layout in
                     Toggle(
-                        layout.label,
+                        layout.menuLabel,
                         isOn: Binding(
                             get: { model.player.layout == layout }, set: { if $0 { model.player.layout = layout } })
                     )
                     .keyboardShortcut(keymap.shortcut(for: layout.menuKey))
                 }
             }
-            Picker("Key Display", selection: Binding(get: { model.keyStyle }, set: { model.keyStyle = $0 })) {
+            Picker(L10n.t("Key display format"), selection: Binding(get: { model.keyStyle }, set: { model.keyStyle = $0 })) {
                 ForEach(KeyStyle.allCases, id: \.self) { Text($0.label).tag($0) }
             }
-            Picker("Waveform Color", selection: Binding(get: { model.waveformPalette }, set: { model.waveformPalette = $0 })) {
+            Picker(L10n.t("Waveform color"), selection: Binding(get: { model.waveformPalette }, set: { model.waveformPalette = $0 })) {
                 ForEach(WaveformPalette.allCases, id: \.self) { Text($0.label).tag($0) }
             }
             Picker("Row Size", selection: Binding(get: { model.rowSize }, set: { model.rowSize = $0 })) {
                 ForEach(RowSize.allCases, id: \.self) { Text($0.label).tag($0) }
             }
-            Button("Reset Columns") { model.resetColumns() }
+            Button(L10n.t("Reset columns")) { model.resetColumns() }
             Divider()
             Toggle("Show Track Filter", isOn: Binding(get: { model.filterBarOpen }, set: { model.filterBarOpen = $0 }))
                 .keyboardShortcut(keymap.shortcut(for: .showFilter))
             Toggle("Show Player", isOn: Binding(get: { model.player.panelOpen }, set: { model.player.panelOpen = $0 }))
                 .keyboardShortcut(keymap.shortcut(for: .showPlayer))
-            Toggle("Show Information", isOn: Binding(get: { model.infoPanelOpen }, set: { model.infoPanelOpen = $0 }))
+            Toggle(L10n.t("Show Information"), isOn: Binding(get: { model.infoPanelOpen }, set: { model.infoPanelOpen = $0 }))
                 .keyboardShortcut(keymap.shortcut(for: .showInformation))
             Toggle("Show Playlist Counts", isOn: Binding(get: { model.prefs.playlistCounts }, set: { model.prefs.playlistCounts = $0 }))
         }
 
         // Track
-        CommandMenu("Track") {
-            Button("Load to Player 1") { model.runTrackMenu(.loadToDeck(.a)) }
+        CommandMenu(L10n.t("Track")) {
+            Button(L10n.t("Load track to player 1")) { model.runTrackMenu(.loadToDeck(.a)) }
                 .disabled(!state.loadToDeckEnabled)
-            Button("Load to Player 2") { model.runTrackMenu(.loadToDeck(.b)) }
+            Button(L10n.t("Load track to player 2")) { model.runTrackMenu(.loadToDeck(.b)) }
                 .disabled(!state.loadToDeckEnabled)
             Divider()
-            item("Analyze Track(s)", .analyse) { model.analyseSelection() }
+            item(L10n.t("Analyze Track"), .analyse) { model.analyseSelection() }
                 .disabled(!state.analyseEnabled)
-            Button("Show in Finder") { model.runTrackMenu(.showInFinder) }
+            Button(L10n.t("Show in Finder")) { model.runTrackMenu(.showInFinder) }
                 .disabled(!state.showInFinderEnabled)
             Divider()
-            Button("Add to Tag List") { model.runTrackMenu(.addToTagList) }
+            Button(L10n.t("Add To Tag List")) { model.runTrackMenu(.addToTagList) }
                 .disabled(!state.addToTagListEnabled)
-            Button("Remove from Playlist") { model.runTrackMenu(.removeFromPlaylist) }
+            Button(L10n.t("Remove from Playlist")) { model.runTrackMenu(.removeFromPlaylist) }
                 .disabled(!state.canRemoveFromPlaylist)
-            Button("Remove from Collection") { model.runTrackMenu(.removeFromCollection) }
+            Button(L10n.t("Remove from Collection")) { model.runTrackMenu(.removeFromCollection) }
                 .disabled(!state.removeFromCollectionEnabled)
         }
 
         // Playlist
-        CommandMenu("Playlist") {
-            item("New Playlist", .newPlaylist) { Task { await model.createPlaylist(near: model.selectedSidebarNode) } }
+        CommandMenu(L10n.t("Playlist")) {
+            item(L10n.t("Create New Playlist"), .newPlaylist) { Task { await model.createPlaylist(near: model.selectedSidebarNode) } }
                 .disabled(!state.newItemEnabled)
-            item("New Folder", .newFolder) { Task { await model.createFolder(near: model.selectedSidebarNode) } }
+            item(L10n.t("Create New Folder"), .newFolder) { Task { await model.createFolder(near: model.selectedSidebarNode) } }
                 .disabled(!state.newItemEnabled)
-            Button("New Intelligent Playlist") { model.newSmartPlaylist(near: model.selectedSidebarNode) }
+            Button(L10n.t("Create New Intelligent Playlist")) { model.newSmartPlaylist(near: model.selectedSidebarNode) }
                 .disabled(!state.newItemEnabled)
             Divider()
-            Button("Rename") { if let node = model.selectedSidebarNode { model.runTreeMenu(.rename, on: node) } }
+            Button(L10n.t("Rename")) { if let node = model.selectedSidebarNode { model.runTreeMenu(.rename, on: node) } }
                 .disabled(!state.renameEnabled)
-            Button("Edit Intelligent Playlist\u{2026}") {
+            Button(L10n.t("Edit Intelligent Playlist\u{2026}")) {
                 if let node = model.selectedSidebarNode { model.runTreeMenu(.editSmartPlaylist, on: node) }
             }
             .disabled(!state.editSmartEnabled)
-            Button("Delete") { if let node = model.selectedSidebarNode { model.runTreeMenu(.delete, on: node) } }
+            Button(L10n.t("Delete")) { if let node = model.selectedSidebarNode { model.runTreeMenu(.delete, on: node) } }
                 .disabled(!state.deleteEnabled)
         }
 
@@ -193,12 +193,12 @@ struct AppCommands: Commands {
             Button("Beat Sync Player 2") { model.player.perform(.beatSync, on: .b) }
                 .disabled(!state.deckBLoaded || !state.deckBEnabled)
             Divider()
-            Button("Change Metronome Sound") { model.player.perform(.metronomeSound) }
+            Button("Change Metronome sound") { model.player.perform(.metronomeSound) }
         }
 
         // Help
         CommandGroup(replacing: .help) {
-            Button("Report a Problem\u{2026}") { openWindow(id: BugReportScene.id) }
+            Button(L10n.t("Report bug\u{2026}")) { openWindow(id: BugReportScene.id) }
         }
     }
 }

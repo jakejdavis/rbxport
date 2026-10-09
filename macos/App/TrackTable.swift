@@ -59,6 +59,8 @@ struct TrackTable: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         let coordinator = context.coordinator
         let viewChanged = coordinator.shownView != opened
+        // Reading the language here re-runs this method when it changes, and the headers are retitled.
+        coordinator.retitleColumns(language: L10n.current, revision: L10n.revision.value)
         coordinator.update(
             opened: opened, layout: layout, keyStyle: keyStyle, sortKey: sortKey, descending: descending,
             palette: palette, rowHeight: rowHeight)
@@ -153,10 +155,24 @@ struct TrackTable: NSViewRepresentable {
             }
         }
 
+        private var titledIn: String?
+
+        /// Column headers in the current language (they are NSTableColumn titles, which SwiftUI does not touch).
+        func retitleColumns(language: String, revision: Int) {
+            guard let table, titledIn != language else { return }
+            titledIn = language
+            for column in table.tableColumns {
+                guard let id = ColumnID(rawValue: column.identifier.rawValue) else { continue }
+                let title = L10n.t(ColumnCatalogue.spec(for: id).label, locale: language)
+                if column.title != title { column.title = title }
+            }
+            table.headerView?.needsDisplay = true
+        }
+
         private func makeColumn(_ id: ColumnID) -> NSTableColumn {
             let spec = ColumnCatalogue.spec(for: id)
             let column = NSTableColumn(identifier: .init(id.rawValue))
-            column.title = spec.label
+            column.title = L10n.t(spec.label)
             column.minWidth = ColumnCatalogue.minWidth
             column.maxWidth = ColumnCatalogue.maxWidth
             column.width = CGFloat(layout.width(of: id))
@@ -503,13 +519,13 @@ struct TrackTable: NSViewRepresentable {
             let all = NSMenuItem(title: "Auto-size All Columns", action: #selector(autoSizeAll), keyEquivalent: "")
             all.target = self
             menu.addItem(all)
-            let reset = NSMenuItem(title: "Reset Columns", action: #selector(resetColumns), keyEquivalent: "")
+            let reset = NSMenuItem(title: L10n.t("Reset columns"), action: #selector(resetColumns), keyEquivalent: "")
             reset.target = self
             menu.addItem(reset)
             menu.addItem(.separator())
             for id in ColumnCatalogue.menuOrder {
                 let item = NSMenuItem(
-                    title: ColumnCatalogue.spec(for: id).label, action: #selector(toggleColumn(_:)), keyEquivalent: "")
+                    title: L10n.t(ColumnCatalogue.spec(for: id).label), action: #selector(toggleColumn(_:)), keyEquivalent: "")
                 item.target = self
                 item.representedObject = id.rawValue
                 item.state = layout.order.contains(id) ? .on : .off

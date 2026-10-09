@@ -20,6 +20,16 @@ enum PlayerLayout: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    /// The menu's wording, React's menu labels (translated by the catalog).
+    var menuLabel: String {
+        switch self {
+        case .one: L10n.t("1 Player")
+        case .two: L10n.t("2 Players")
+        case .simple: L10n.t("Simple Player")
+        case .browser: L10n.t("Full Browser")
+        }
+    }
+
     /// How many decks are drawn: none in the full browser, two in the 2 player layout, else one.
     var deckCount: Int {
         switch self {
