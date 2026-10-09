@@ -8,11 +8,11 @@ use std::time::Instant;
 use rbl_app::dto::LibraryProblemDto;
 use rbl_app::error::run_command;
 use rbl_app::state::AppState;
-use rbl_app::{analysis, browse, cues, details, device_settings, devices, edits, explorer, export, grid, import, maintenance, media, startup, track_data, track_edits, AppError, AppEvent, AppResult, EventSink};
+use rbl_app::{analysis, browse, cues, itunes, usb_import, details, device_settings, devices, edits, explorer, export, grid, import, maintenance, media, startup, track_data, track_edits, AppError, AppEvent, AppResult, EventSink};
 use rbl_db::{Library as Db, LibraryLocation, OpenMode};
 
 use crate::error::FfiError;
-use crate::devices::{DeviceSettings, DeviceSyncState, ExportOptions, ExportProgress, ExportReport, MissingExportFile, SyncDeviceReport, VerifyReport};
+use crate::devices::{ItunesLibrary, ItunesTrack, UsbImportReport, DeviceSettings, DeviceSyncState, ExportOptions, ExportProgress, ExportReport, MissingExportFile, SyncDeviceReport, VerifyReport};
 use crate::events::{EventListener, ListenerSink};
 use crate::playback::{Playback, PlaybackListener};
 use crate::types::{
@@ -521,6 +521,43 @@ impl Core {
     /// Imports a rekordbox XML collection. Blocking; raises `ImportProgress` per track.
     pub fn import_xml(&self, path: String) -> Result<XmlImportReport, FfiError> {
         ffi("import_xml", || import::import_xml(&self.state, &self.sink, &path)).map(Into::into)
+    }
+
+    // ---- Phase 5b: import from a stick, and the iTunes / Music library. Behind the write gate.
+
+    /// Brings cues and beat grids, play history and/or CDJ/mixer settings from a stick into the
+    /// library. Blocking; raises `ImportProgress`, then `LibraryChanged`, `GridChanged`, `CuesChanged`.
+    pub fn import_usb(&self, path: String, cues: bool, history: bool, settings: bool) -> Result<UsbImportReport, FfiError> {
+        ffi("import_usb", || usb_import::import_usb(&self.state, &self.editor, &self.sink, &path, cues, history, settings)).map(Into::into)
+    }
+
+    /// The iTunes / Music library at its usual place under the Music folder, or `None`.
+    /// Never looks while a fixture library is loaded.
+    pub fn itunes_default_library(&self) -> Result<Option<ItunesLibrary>, FfiError> {
+        if self.is_fixture_library() {
+            return Ok(None);
+        }
+        ffi("itunes_default_library", || match dirs::audio_dir() {
+            Some(music) => itunes::default_library(&music),
+            None => Ok(None),
+        })
+        .map(|l| l.map(Into::into))
+    }
+
+    /// Reads the iTunes / Music library XML at `path`. Read-only.
+    pub fn itunes_library_at(&self, path: String) -> Result<ItunesLibrary, FfiError> {
+        ffi("itunes_library_at", || itunes::library_at(&path)).map(Into::into)
+    }
+
+    /// The tracks of one iTunes playlist (`itunes:<index>`), in order.
+    pub fn itunes_playlist_tracks(&self, path: String, node_id: String) -> Result<Vec<ItunesTrack>, FfiError> {
+        ffi("itunes_playlist_tracks", || itunes::playlist_tracks(&path, &node_id)).map(|t| t.into_iter().map(Into::into).collect())
+    }
+
+    /// Imports the chosen playlists (`itunes:<index>`), the folders above them and their tracks.
+    /// Blocking; raises `ImportProgress` per track.
+    pub fn import_itunes_selected(&self, path: String, ids: Vec<String>) -> Result<XmlImportReport, FfiError> {
+        ffi("import_itunes_selected", || itunes::import_selected(&self.state, &self.sink, &path, &ids)).map(Into::into)
     }
 
     /// Tracks whose file is gone, bounded to `limit` (the count is exact).

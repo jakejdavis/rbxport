@@ -401,7 +401,7 @@ struct DeviceModelTests {
         #expect(spec(loose, "Export Track")?.isEnabled == false)
         // The device row: Eject goes grey while it is busy; Sync Manager is always there.
         let idle = ContextMenus.treeMenu(for: .device)!
-        #expect(specs(idle).map(\.title) == ["Eject", "Sync Manager\u{2026}"])
+        #expect(specs(idle).map(\.title) == ["Import from Device\u{2026}", "Eject", "Sync Manager\u{2026}"])
         let busy = ContextMenus.treeMenu(for: .device, deviceBusy: true)!
         #expect(spec(busy, "Eject")?.isEnabled == false)
     }

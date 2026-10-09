@@ -236,6 +236,7 @@ struct DevicePanelView: View {
     let model: DeviceSettingsModel
     let playlists: [PlaylistTarget]
     let exportPlaylist: (String) -> Void
+    var importFromDevice: () -> Void = {}
     let busy: Bool
 
     var body: some View {
@@ -255,7 +256,7 @@ struct DevicePanelView: View {
                         case .general:
                             GeneralTabView(
                                 device: device, settings: settings, model: model, playlists: playlists,
-                                exportPlaylist: exportPlaylist, busy: busy)
+                                exportPlaylist: exportPlaylist, importFromDevice: importFromDevice, busy: busy)
                         case .category: ListPairView(kind: .category, settings: settings, model: model)
                         case .sort: ListPairView(kind: .sort, settings: settings, model: model)
                         case .column: ColumnTabView(settings: settings, model: model)
@@ -287,6 +288,7 @@ private struct GeneralTabView: View {
     let model: DeviceSettingsModel
     let playlists: [PlaylistTarget]
     let exportPlaylist: (String) -> Void
+    let importFromDevice: () -> Void
     let busy: Bool
     @State private var name = ""
     @State private var chosen: String?
@@ -362,6 +364,16 @@ private struct GeneralTabView: View {
                     }
                     .disabled(busy || playlists.isEmpty)
                     .accessibilityIdentifier("device-export-button")
+                }
+            }
+            Section("Import") {
+                HStack {
+                    Text("Bring cues, play history or settings from this device back into the library.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Import from Device\u{2026}", action: importFromDevice)
+                        .disabled(busy)
+                        .accessibilityIdentifier("device-import-button")
                 }
             }
         }

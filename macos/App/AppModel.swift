@@ -61,6 +61,9 @@ final class AppModel {
     /// The open Missing Files and Find Duplicates sheets, if any.
     var missingFiles: MissingFilesModel?
     var duplicates: DuplicatesModel?
+    /// Phase 5b: the open Import from USB sheet, and the iTunes / Music library browser.
+    var usbImport: UsbImportModel?
+    private(set) var itunes: ItunesModel!
     /// Panels and alerts; tests replace them.
     var dialogs = Dialogs.live
     /// An import is running (the status bar shows `importProgress`).
@@ -224,6 +227,13 @@ final class AppModel {
         devices = DevicesModel(jobs: exportJobs)
         exportPrefs = DeviceExportPrefs(defaults: defaults)
         info.setActive(infoPanelOpen)
+        itunes = ItunesModel(
+            backend: backend, defaults: defaults, dialogs: { [weak self] in self?.dialogs ?? .live },
+            notify: { [weak self] in self?.notice = $0 },
+            busy: { [weak self] on in
+                self?.importInFlight = on
+                self?.importProgress = on ? ImportProgressState(done: 0, total: 0, title: "") : nil
+            })
         info.onEdit = { [weak self] edit, id in await self?.applyInfoEdit(edit, to: id) ?? false }
         onLoadToDeck = { [weak self] id, deck in
             guard let self else { return }
@@ -670,7 +680,7 @@ final class AppModel {
         case .exportTrackToDevice(let path):
             let ids = orderedSelection
             Task { await exportTracks(ids, to: path) }
-        case .exportToDevice, .ejectDevice, .openSyncManager, .exportPlaylist, .createPlaylist, .createFolder, .createSmartPlaylist, .editSmartPlaylist, .rename, .delete,
+        case .exportToDevice, .ejectDevice, .openSyncManager, .importFromDevice, .exportPlaylist, .createPlaylist, .createFolder, .createSmartPlaylist, .editSmartPlaylist, .rename, .delete,
             .sortItems:
             break
         }

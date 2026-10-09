@@ -345,7 +345,7 @@ struct SidebarOutline: NSViewRepresentable {
 
         private func run(_ command: MenuCommand, on node: SidebarNode) {
             switch command {
-            case .exportToDevice, .ejectDevice, .openSyncManager:
+            case .exportToDevice, .ejectDevice, .openSyncManager, .importFromDevice:
                 model.runDeviceMenu(command, on: node)
                 return
             case .exportPlaylist:

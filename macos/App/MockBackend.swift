@@ -112,6 +112,7 @@ actor MockBackend: BackendProtocol {
     var deviceList: [Device] = []
     /// What the Phase 5a device, export and sync calls answer, and what they were asked.
     var devices5a = MockDeviceScript()
+    var imports5b = MockImportScript()
     var filterValuesAnswer = FilterValues(
         bpms: [CountedBpm(value: 120, count: 50), CountedBpm(value: 128, count: 5)],
         keys: [CountedKey(value: "Am", count: 3), CountedKey(value: "C", count: 2)], tags: [])
@@ -1153,4 +1154,72 @@ extension MockBackend {
     func cancelExport(path: String) async { devices5a.cancelled.append(path) }
 
     func exportProgress() async -> [ExportProgress] { devices5a.progressSnapshot }
+}
+
+// MARK: - Phase 5b
+
+/// What the USB-import and iTunes calls answer, and what they were asked.
+struct MockImportScript: Sendable {
+    var usbReport = UsbImportReport(tracks: 3, histories: 2, settings: 1, skipped: 1, warnings: [])
+    /// Per-kind answers override `usbReport` ("cues", "history", "settings").
+    var usbByKind: [String: UsbImportReport] = [:]
+    var usbFailure: [String: FfiError] = [:]
+    var usbDelay: Duration = .zero
+    var library: ItunesLibrary?
+    var libraries: [String: ItunesLibrary] = [:]
+    var tracks: [String: [ItunesTrack]] = [:]
+    var itunesReport = XmlImportReport(imported: 2, existing: 1, skipped: [], playlists: 2, cues: 0, tracks: [])
+    var itunesFailure: FfiError?
+    var usbCalls: [String] = []
+    var itunesCalls: [String] = []
+}
+
+extension MockBackend {
+    func scriptImports(_ change: @Sendable (inout MockImportScript) -> Void) { change(&imports5b) }
+    func usbCalls() -> [String] { imports5b.usbCalls }
+    func itunesCalls() -> [String] { imports5b.itunesCalls }
+
+    func importUSB(path: String, cues: Bool, history: Bool, settings: Bool) async throws -> UsbImportReport {
+        let kind = cues ? "cues" : history ? "history" : "settings"
+        imports5b.usbCalls.append("importUSB(\(path),cues:\(cues),history:\(history),settings:\(settings))")
+        if imports5b.usbDelay > .zero { try? await Task.sleep(for: imports5b.usbDelay) }
+        // The gate guards cues and history; copying settings touches no library row.
+        if cues || history {
+            if gateProtected { throw FfiError.ReadOnly(message: Self.protectedMessage, detail: nil) }
+            if gateRunning { throw FfiError.ReadOnly(message: Self.runningMessage, detail: nil) }
+        }
+        if let failure = imports5b.usbFailure[kind] { throw failure }
+        continuation.yield(.importProgress(progress: ImportProgress(path: path, state: "writing", done: 1, total: 1, title: kind)))
+        let report = imports5b.usbByKind[kind] ?? imports5b.usbReport
+        if report.tracks > 0 || report.histories > 0 { publish() }
+        return report
+    }
+
+    func itunesDefaultLibrary() async throws -> ItunesLibrary? {
+        imports5b.itunesCalls.append("default")
+        return isFixture ? nil : imports5b.library
+    }
+
+    func itunesLibrary(at path: String) async throws -> ItunesLibrary {
+        imports5b.itunesCalls.append("library(\(path))")
+        if let library = imports5b.libraries[path] ?? (imports5b.library?.path == path ? imports5b.library : nil) {
+            return library
+        }
+        throw FfiError.NotFound(message: "That file could not be read.", detail: nil)
+    }
+
+    func itunesPlaylistTracks(path: String, nodeID: String) async throws -> [ItunesTrack] {
+        imports5b.itunesCalls.append("tracks(\(nodeID))")
+        return imports5b.tracks[nodeID] ?? []
+    }
+
+    func importItunesSelected(path: String, ids: [String]) async throws -> XmlImportReport {
+        imports5b.itunesCalls.append("import(\(ids.joined(separator: ",")))")
+        return try edit("importItunes(\(ids.joined(separator: ",")))", label: nil) {
+            if let failure = imports5b.itunesFailure { throw failure }
+            continuation.yield(.importProgress(progress: ImportProgress(path: path, state: "writing", done: 1, total: 1, title: "")))
+            trackCount += Int(imports5b.itunesReport.imported)
+            return imports5b.itunesReport
+        }
+    }
 }

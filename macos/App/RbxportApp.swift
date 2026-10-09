@@ -61,10 +61,16 @@ struct RbxportApp: App {
                     .keyboardShortcut("y", modifiers: [.command, .shift])
                 Menu("Import") {
                     Button("Track\u{2026}") { Task { await model.importFromPanel(folders: false) } }
+                        .disabled(!model.canEdit)
                     Button("Folder\u{2026}") { Task { await model.importFromPanel(folders: true) } }
+                        .disabled(!model.canEdit)
                     Button("rekordbox XML\u{2026}") { Task { await model.importXMLFromPanel() } }
+                        .disabled(!model.canEdit)
+                    // Browsing the Music library writes nothing; only its Import button needs editing.
+                    Button("iTunes Library XML\u{2026}") { Task { await model.openItunesFromPanel() } }
+                    Button("USB Device\u{2026}") { model.openUsbImportFromMenu() }
+                        .disabled(model.devices.devices.isEmpty)
                 }
-                .disabled(!model.canEdit)
                 Button("Analyze Track(s)") { model.analyseSelection() }
                     .keyboardShortcut("a", modifiers: [.command, .shift])
                     .disabled(!model.canEdit || model.selectedIDs.isEmpty)
@@ -151,6 +157,13 @@ struct RbxportApp: App {
                 await model.waitUntilSettled()
                 try? await Task.sleep(for: .milliseconds(1200))
                 await model.runDeviceDemo(steps, environment: env)
+            }
+        }
+        if let steps = env["RBXPORT_DEMO_IMPORT"] {
+            Task { @MainActor in
+                await model.waitUntilSettled()
+                try? await Task.sleep(for: .milliseconds(1200))
+                await model.runImportDemo(steps, environment: env)
             }
         }
         if env["RBXPORT_OPEN_SMART_EDITOR"] == "1" {
