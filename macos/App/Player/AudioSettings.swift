@@ -29,17 +29,22 @@ final class AudioSettingsModel {
     private(set) var bufferSize: UInt32
 
     @ObservationIgnored private let playback: any PlaybackEngine
-    @ObservationIgnored private let defaults: UserDefaults
+    let prefs: PreferencesStore
 
-    init(playback: any PlaybackEngine, defaults: UserDefaults) {
+    init(playback: any PlaybackEngine, defaults: UserDefaults, prefs: PreferencesStore? = nil) {
         self.playback = playback
-        self.defaults = defaults
-        let rate = (defaults.object(forKey: Self.sampleRateKey) as? Int).flatMap { UInt32(exactly: $0) }
-        sampleRate = rate.flatMap { Self.sampleRates.contains($0) ? $0 : nil } ?? Self.defaultSampleRate
-        let buffer = (defaults.object(forKey: Self.bufferSizeKey) as? Int).flatMap { UInt32(exactly: $0) }
-        bufferSize = buffer.flatMap { Self.bufferSizes.contains($0) ? $0 : nil } ?? Self.defaultBufferSize
+        let prefs = prefs ?? PreferencesStore(defaults: defaults)
+        self.prefs = prefs
+        sampleRate = UInt32(prefs.sampleRate)
+        bufferSize = UInt32(prefs.bufferSize)
         // Stored, not applied: nothing is dropped and nothing is opened.
         playback.setAudioConfig(sampleRate: sampleRate, bufferFrames: bufferSize)
+        // Reset to defaults in Settings changes the store; follow it.
+        prefs.onChange { [weak self] key in
+            guard let self else { return }
+            if key == PrefKeys.sampleRate { self.setSampleRate(UInt32(prefs.sampleRate)) }
+            if key == PrefKeys.bufferSize { self.setBufferSize(UInt32(prefs.bufferSize)) }
+        }
     }
 
     /// `512 samples (10.7 ms)`.
@@ -82,14 +87,14 @@ final class AudioSettingsModel {
     func setSampleRate(_ rate: UInt32) {
         guard Self.sampleRates.contains(rate), rate != sampleRate else { return }
         sampleRate = rate
-        defaults.set(Int(rate), forKey: Self.sampleRateKey)
+        prefs.sampleRate = Int(rate)
         playback.setAudioConfig(sampleRate: rate, bufferFrames: bufferSize)
     }
 
     func setBufferSize(_ frames: UInt32) {
         guard Self.bufferSizes.contains(frames), frames != bufferSize else { return }
         bufferSize = frames
-        defaults.set(Int(frames), forKey: Self.bufferSizeKey)
+        prefs.bufferSize = Int(frames)
         playback.setAudioConfig(sampleRate: sampleRate, bufferFrames: frames)
     }
 }

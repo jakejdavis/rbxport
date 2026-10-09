@@ -212,7 +212,7 @@ struct PlayRecordingTests {
         #expect(await rig.backend.recordedPlays == ["7"])
         // Switched off in the settings: nothing is recorded.
         let off = await DeckRig.make()
-        off.defaults.set(false, forKey: "recordHistory")
+        off.deck.prefs.recordHistory = false
         off.deck.play()
         for t in 0...75 { off.deck.notePlayTime(at: Double(t)) }
         await off.deck.playRecord?.value
@@ -333,7 +333,7 @@ struct GridEditModelTests {
 struct AnalysisQueueTests {
     private func queue(_ backend: MockBackend, slots: Int? = nil) -> AnalysisQueue {
         let defaults = scratchDefaults()
-        if let slots { defaults.set(slots, forKey: "analysis.slots") }
+        if let slots { defaults.set(slots, forKey: PrefKeys.Legacy.slots) }
         return AnalysisQueue(backend: backend, defaults: defaults)
     }
 
@@ -364,6 +364,9 @@ struct AnalysisQueueTests {
         await backend.setProtectLibrary(false)
         await backend.setAnalysisDelay(.milliseconds(40))
         let q = queue(backend, slots: 9)
+        // A stored 9 is not a choice; it comes back as the default (React sanitises the same way).
+        #expect(q.slots == 3)
+        q.slots = 9
         #expect(q.slots == 4)
         q.slots = 0
         #expect(q.slots == 1 && q.running.isEmpty)
@@ -380,7 +383,7 @@ struct AnalysisQueueTests {
         let defaults = scratchDefaults()
         let q = AnalysisQueue(backend: backend, defaults: defaults)
         q.slots = 2
-        #expect(defaults.integer(forKey: "analysis.slots") == 2)
+        #expect(defaults.integer(forKey: PrefKeys.concurrentTracks) == 2)
         #expect(AnalysisQueue(backend: backend, defaults: defaults).slots == 2)
         q.rekordboxMode = true
         q.enqueue(items(1))
@@ -483,7 +486,7 @@ struct DeckMenuTests {
         let deck = DeckModel(deck: .a, playback: MockPlayback(), defaults: defaults)
         #expect(deck.waveformClick)
         deck.waveformClick = false
-        #expect(defaults.object(forKey: "deck.waveformClick") as? Bool == false)
+        #expect(defaults.object(forKey: PrefKeys.waveformClick) as? Bool == false)
         #expect(!DeckModel(deck: .b, playback: MockPlayback(), defaults: defaults).waveformClick)
     }
 
@@ -492,7 +495,7 @@ struct DeckMenuTests {
         let model = AppModel(backend: backend, layoutStore: isolatedStore())
         model.player.chooseWaveformPalette(.colour)
         #expect(model.waveformPalette == .colour)
-        #expect(model.layoutStore.defaults.string(forKey: "waveformPalette") == "colour")
+        #expect(model.layoutStore.defaults.string(forKey: PrefKeys.waveformColor) == "rgb")
     }
 
     @Test func analyzeTrackFromTheDeckQueuesTheLoadedTrack() async {

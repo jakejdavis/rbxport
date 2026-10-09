@@ -72,13 +72,11 @@ final class AppModel {
     /// Library Protection (Settings > General). On by default, as in the React app. Persisted;
     /// pushed to the core, whose write gate is the single authority.
     var protectLibrary: Bool {
-        didSet {
-            guard protectLibrary != oldValue else { return }
-            layoutStore.defaults.set(protectLibrary, forKey: Self.protectLibraryKey)
-            Task { await applyProtection() }
-        }
+        get { prefs.protectLibrary }
+        set { prefs.protectLibrary = newValue }
     }
-    static let protectLibraryKey = "protectLibrary"
+    /// Everything Settings changes, over the same defaults as the layout store.
+    let prefs: PreferencesStore
     /// How often the summary is re-read to notice rekordbox starting or quitting. Off in tests.
     var readOnlyPollInterval: Duration?
     @ObservationIgnored var pollTask: Task<Void, Never>?
@@ -156,11 +154,13 @@ final class AppModel {
 
     /// How tall rows are when the Artwork or Preview column is shown. Persisted.
     var rowSize: RowSize {
-        didSet { if rowSize != oldValue { layoutStore.defaults.set(rowSize.rawValue, forKey: "rowSize") } }
+        get { prefs.rowSize }
+        set { prefs.rowSize = newValue }
     }
     /// The palette the Preview column draws in. Persisted.
     var waveformPalette: WaveformPalette {
-        didSet { if waveformPalette != oldValue { layoutStore.defaults.set(waveformPalette.rawValue, forKey: "waveformPalette") } }
+        get { prefs.waveformColor }
+        set { prefs.waveformColor = newValue }
     }
 
     /// The height of table rows for the shown columns: compact unless a column draws images.
@@ -179,13 +179,21 @@ final class AppModel {
     private(set) var context: ColumnContext = .collection
     private(set) var layout: ColumnLayout
     var keyStyle: KeyStyle {
-        didSet {
-            guard keyStyle != oldValue else { return }
-            layoutStore.defaults.set(keyStyle.rawValue, forKey: "keyStyle")
+        get { prefs.keyDisplay }
+        set { prefs.keyDisplay = newValue }
+    }
+
+    /// What the models do when a preference changes in Settings (or is reset there).
+    private func preferenceChanged(_ key: String) {
+        switch key {
+        case PrefKeys.keyDisplay:
             if sortKey == .key || sortKey == .keyCamelot {
                 sortKey = keyStyle == .camelot ? .keyCamelot : .key
                 reopen()
             }
+        case PrefKeys.protectLibrary:
+            Task { await applyProtection() }
+        default: break
         }
     }
 
@@ -211,27 +219,26 @@ final class AppModel {
     init(backend: any BackendProtocol, layoutStore: ColumnLayoutStore = ColumnLayoutStore()) {
         self.backend = backend
         self.layoutStore = layoutStore
-        sidebar = SidebarModel(backend: backend, defaults: layoutStore.defaults)
+        let prefs = PreferencesStore(defaults: layoutStore.defaults)
+        self.prefs = prefs
+        sidebar = SidebarModel(backend: backend, defaults: layoutStore.defaults, prefs: prefs)
         selectedNodeID = layoutStore.defaults.string(forKey: SidebarModel.Keys.selected)
-        protectLibrary = (layoutStore.defaults.object(forKey: Self.protectLibraryKey) as? Bool) ?? true
         filterBarOpen = layoutStore.defaults.bool(forKey: "filterBar.open")
         pager = RowPager(backend: backend)
         layout = layoutStore.load(.collection)
-        keyStyle = layoutStore.defaults.string(forKey: "keyStyle").flatMap(KeyStyle.init) ?? .classic
         let defaults = layoutStore.defaults
         artwork = ArtworkService(backend: backend)
         waveforms = WaveformService(backend: backend)
         info = InfoPanelModel(backend: backend, artwork: artwork, defaults: defaults)
         infoPanelOpen = defaults.bool(forKey: "infoPanel.open")
-        rowSize = defaults.string(forKey: "rowSize").flatMap(RowSize.init) ?? .standard
-        waveformPalette = defaults.string(forKey: "waveformPalette").flatMap(WaveformPalette.init) ?? .bands
-        player = PlayerModel(backend: backend, waveforms: waveforms, artwork: artwork, defaults: defaults)
-        analysis = AnalysisQueue(backend: backend, defaults: defaults)
+        player = PlayerModel(backend: backend, waveforms: waveforms, artwork: artwork, defaults: defaults, prefs: prefs)
+        analysis = AnalysisQueue(backend: backend, defaults: defaults, prefs: prefs)
         exportJobs = ExportJobsModel()
         devices = DevicesModel(jobs: exportJobs)
-        exportPrefs = DeviceExportPrefs(defaults: defaults)
-        link = LinkModel(backend: backend, defaults: defaults)
+        exportPrefs = DeviceExportPrefs(store: prefs)
+        link = LinkModel(backend: backend, defaults: defaults, store: prefs)
         info.setActive(infoPanelOpen)
+        prefs.onChange { [weak self] key in self?.preferenceChanged(key) }
         link.alphanumericKeys = { [weak self] in self?.exportPrefs.stickDefaults.keyDisplay == .alphanumeric }
         link.notify = { [weak self] in self?.notice = $0 }
         itunes = ItunesModel(

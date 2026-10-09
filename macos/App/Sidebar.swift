@@ -146,12 +146,13 @@ final class SidebarModel {
     var showChildCounts: Bool {
         didSet {
             guard showChildCounts != oldValue else { return }
-            defaults.set(showChildCounts, forKey: Keys.childCounts)
+            prefs.playlistCounts = showChildCounts
             version += 1
         }
     }
 
     @ObservationIgnored let defaults: UserDefaults
+    let prefs: PreferencesStore
     @ObservationIgnored private let backend: any BackendProtocol
     /// Called with the list whenever the devices are set, so the device list model can follow.
     @ObservationIgnored var onDevices: ([Device]) -> Void = { _ in }
@@ -160,17 +161,18 @@ final class SidebarModel {
 
     enum Keys {
         static let expansion = "sidebar.expansion"
-        static let childCounts = "sidebar.childCounts"
         static let selected = "sidebar.selectedNode"
     }
 
     /// Explorer folders listed per folder (the core's cap is 2000).
     static let noDevicesID = "note:no-devices"
 
-    init(backend: any BackendProtocol, defaults: UserDefaults) {
+    init(backend: any BackendProtocol, defaults: UserDefaults, prefs: PreferencesStore? = nil) {
         self.backend = backend
         self.defaults = defaults
-        showChildCounts = defaults.bool(forKey: Keys.childCounts)
+        let prefs = prefs ?? PreferencesStore(defaults: defaults)
+        self.prefs = prefs
+        showChildCounts = prefs.playlistCounts
         expansion = (defaults.dictionary(forKey: Keys.expansion) as? [String: Bool]) ?? [:]
         sections = SidebarSection.allCases.map {
             SidebarNode(id: "section:\($0.rawValue)", kind: .section($0), name: $0.title)
@@ -178,6 +180,11 @@ final class SidebarModel {
         section(.devices).children = [Self.noDevicesNote(parent: section(.devices))]
         section(.tagList).children = [Self.tagListNode(parent: section(.tagList))]
         section(.itunes).children = [Self.itunesNode(parent: section(.itunes))]
+        prefs.onChange { [weak self] key in
+            if key == PrefKeys.playlistCounts, let self, self.showChildCounts != prefs.playlistCounts {
+                self.showChildCounts = prefs.playlistCounts
+            }
+        }
     }
 
     func section(_ which: SidebarSection) -> SidebarNode {

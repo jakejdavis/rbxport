@@ -32,13 +32,13 @@ enum PlayerLayout: String, CaseIterable, Identifiable, Sendable {
     /// False only for the simple player (no detail waveform, no transport rail).
     var isFullDeck: Bool { self != .simple }
 
-    /// Command-7, 8, 9 and 0.
-    var keyEquivalent: Character {
+    /// The binding-table row whose key switches to this layout (Command-7, 8, 9 and 0 by default).
+    var bindingID: String {
         switch self {
-        case .one: "7"
-        case .two: "8"
-        case .simple: "9"
-        case .browser: "0"
+        case .one: "menu.layout-one"
+        case .two: "menu.layout-two"
+        case .simple: "menu.layout-simple"
+        case .browser: "menu.layout-browser"
         }
     }
 }

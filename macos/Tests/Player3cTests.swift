@@ -70,7 +70,7 @@ struct LayoutTests {
         #expect(PlayerLayout.allCases == [.one, .two, .simple, .browser])
         #expect(PlayerLayout.allCases.map(\.label) == ["1 PLAYER", "2 PLAYER", "SIMPLE PLAYER", "FULL BROWSER"])
         #expect(PlayerLayout.allCases.map(\.deckCount) == [1, 2, 1, 0])
-        #expect(PlayerLayout.allCases.map(\.keyEquivalent) == ["7", "8", "9", "0"])
+        #expect(PlayerLayout.allCases.map { Keymap().chord(for: $0.bindingID).key } == ["7", "8", "9", "0"])
         #expect(PlayerLayout.allCases.map(\.isFullDeck) == [true, true, false, true])
     }
 
@@ -178,28 +178,27 @@ struct DeckBRoutingTests {
         KeyChord(character: character, keyCode: code, modifiers: mods)
     }
 
+    private func resolve(_ chord: KeyChord, two: Bool, up: Bool = false, loaded: Bool = true) -> KeyEffect? {
+        PlayerKeymap.resolve(
+            chord, isUp: up, isRepeat: false, typing: false, loaded: { _ in loaded }, twoDecks: two)
+    }
+
     @Test func shiftIsDeckBInTheTwoDeckLayoutOnly() {
-        let q = PlayerKeymap.route(chord("q", 0, .shift), twoDecks: true)
-        #expect(q?.deck == .b && q?.chord.modifiers.isEmpty == true && q?.chord.character == "q")
-        #expect(PlayerKeymap.route(chord("q"), twoDecks: true)?.deck == .a)
-        #expect(PlayerKeymap.route(chord("q"), twoDecks: false)?.deck == .a)
-        #expect(PlayerKeymap.route(chord("q", 0, .shift), twoDecks: false) == nil)
-        // Shift with another modifier is nobody's: there are no Shift-Command hot cue clears for B.
-        #expect(PlayerKeymap.route(chord("1", 0, [.shift, .command]), twoDecks: true) == nil)
+        #expect(resolve(chord("q", 0, .shift), two: true) == .deck(.b, .quantize))
+        #expect(resolve(chord("q"), two: true) == .deck(.a, .quantize))
+        #expect(resolve(chord("q"), two: false) == .deck(.a, .quantize))
+        #expect(resolve(chord("q", 0, .shift), two: false) == nil)
+        // Shift with Command has no hot cue clear for B by default.
+        #expect(resolve(chord("1", 0, [.shift, .command]), two: true) == nil)
     }
 
     @Test func shiftedNumbersAreBsHotCuesAndTheArrowsBsJump() {
-        let one = PlayerKeymap.route(chord("!", 0, .shift), twoDecks: true)!
-        #expect(one.deck == .b)
-        #expect(PlayerKeymap.action(for: one.chord, isUp: false, isRepeat: false, typing: false, loaded: true) == .hotCueDown("A"))
-        #expect(PlayerKeymap.action(for: one.chord, isUp: true, isRepeat: false, typing: false, loaded: true) == .hotCueUp)
-        let arrow = PlayerKeymap.route(chord("", PlayerKeymap.right, .shift), twoDecks: true)!
-        #expect(arrow.deck == .b)
-        #expect(PlayerKeymap.action(for: arrow.chord, isUp: false, isRepeat: false, typing: false, loaded: true) == .jump(1))
-        // Shift-Space plays B; F1 is BEAT SYNC.
-        let space = PlayerKeymap.route(chord("", PlayerKeymap.space, .shift), twoDecks: true)!
-        #expect(PlayerKeymap.action(for: space.chord, isUp: false, isRepeat: false, typing: false, loaded: false) == .togglePlay)
-        #expect(PlayerKeymap.action(for: chord("", PlayerKeymap.f1), isUp: false, isRepeat: false, typing: false, loaded: true) == .beatSync)
+        #expect(resolve(chord("!", 0, .shift), two: true) == .deck(.b, .hotCueDown("A")))
+        #expect(resolve(chord("!", 0, .shift), two: true, up: true) == .deck(.b, .hotCueUp))
+        #expect(resolve(chord("", PlayerKeymap.right, .shift), two: true) == .deck(.b, .jump(1)))
+        // Shift-Space plays B (even idle); F1 is BEAT SYNC.
+        #expect(resolve(chord("", PlayerKeymap.space, .shift), two: true, loaded: false) == .deck(.b, .togglePlay))
+        #expect(resolve(chord("", PlayerKeymap.f1), two: true) == .deck(.a, .beatSync))
     }
 
     @Test func keysPerformedOnBTouchOnlyDeckB() {

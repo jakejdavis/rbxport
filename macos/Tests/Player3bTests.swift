@@ -381,9 +381,11 @@ struct ControlLogicTests {
     // MARK: Keymap
 
     private func action(_ char: String, _ code: UInt16 = 0, mods: NSEvent.ModifierFlags = [], up: Bool = false, repeating: Bool = false, typing: Bool = false, loaded: Bool = true) -> PlayerKeyAction? {
-        PlayerKeymap.action(
-            for: KeyChord(character: char, keyCode: code, modifiers: mods), isUp: up, isRepeat: repeating, typing: typing,
-            loaded: loaded)
+        let effect = PlayerKeymap.resolve(
+            KeyChord(character: char, keyCode: code, modifiers: mods), isUp: up, isRepeat: repeating, typing: typing,
+            loaded: { _ in loaded }, twoDecks: false)
+        if case .deck(.a, let action)? = effect { return action }
+        return nil
     }
 
     @Test func thePlayerGroupMapsToDeckA() {

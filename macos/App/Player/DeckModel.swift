@@ -114,7 +114,8 @@ final class DeckModel {
     }
     /// Deck menu: a click on the overview seeks. Persisted, shared by both decks.
     var waveformClick: Bool {
-        didSet { if waveformClick != oldValue { defaults.set(waveformClick, forKey: "deck.waveformClick") } }
+        get { prefs.waveformClick }
+        set { prefs.waveformClick = newValue }
     }
     var timeMode: TimeMode {
         didSet { if timeMode != oldValue { defaults.set(timeMode.rawValue, forKey: key("timeMode")) } }
@@ -126,6 +127,7 @@ final class DeckModel {
     @ObservationIgnored private let waveforms: WaveformService?
     @ObservationIgnored private let artworks: ArtworkService?
     @ObservationIgnored let defaults: UserDefaults
+    let prefs: PreferencesStore
     @ObservationIgnored let now: () -> TimeInterval
     @ObservationIgnored private var nextLoadID: UInt64 = 0
     /// After a local seek, ticks of the old generation are ignored until the engine confirms.
@@ -152,7 +154,7 @@ final class DeckModel {
     @ObservationIgnored var playRecord: Task<Void, Never>?
     @ObservationIgnored var playClock = PlayClock()
     /// Record a play into the history after a minute (Settings: record history; on by default).
-    var recordsHistory: Bool { defaults.object(forKey: "recordHistory") as? Bool ?? true }
+    var recordsHistory: Bool { prefs.recordHistory }
     /// The beat-grid editor for the loaded track.
     @ObservationIgnored lazy var grid = GridEditModel(deck: self)
     /// Ticks do not move the loop display until this, so a loop just set does not flicker.
@@ -177,7 +179,7 @@ final class DeckModel {
 
     init(
         deck: Deck, playback: any PlaybackEngine, waveforms: WaveformService? = nil, artworks: ArtworkService? = nil,
-        backend: (any BackendProtocol)? = nil, defaults: UserDefaults = .standard,
+        backend: (any BackendProtocol)? = nil, defaults: UserDefaults = .standard, prefs: PreferencesStore? = nil,
         now: @escaping () -> TimeInterval = CACurrentMediaTime
     ) {
         self.deck = deck
@@ -186,11 +188,11 @@ final class DeckModel {
         self.artworks = artworks
         self.backend = backend
         self.defaults = defaults
+        self.prefs = prefs ?? PreferencesStore(defaults: defaults)
         self.now = now
         let prefix = deck == .a ? "deckA" : "deckB"
         tempoRange = defaults.string(forKey: "\(prefix).tempoRange").flatMap(TempoRange.init) ?? .six
         timeMode = defaults.string(forKey: "\(prefix).timeMode").flatMap(TimeMode.init) ?? .elapsed
-        waveformClick = defaults.object(forKey: "deck.waveformClick") as? Bool ?? true
         let storedZoom = defaults.object(forKey: "\(prefix).zoomBars") as? Double
         zoomBars = storedZoom.map(DetailZoom.clamped) ?? DetailZoom.default
     }
@@ -571,7 +573,7 @@ extension DeckModel {
     // MARK: Derived
 
     /// The grid cue and loop points snap to when Q is on.
-    var quantizeGrid: BeatGrid? { quantize ? beats : nil }
+    var quantizeGrid: BeatGrid? { quantize ? beats.subdivided(prefs.quantizeBeat.divisions) : nil }
 
     /// The key as it sounds with the key shift applied.
     var shiftedKey: String { KeyTranspose.transpose(track?.key ?? "", semitones: keyShift) }

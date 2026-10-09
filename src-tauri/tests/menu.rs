@@ -55,7 +55,6 @@ fn the_menu_builds_and_carries_the_ids_the_frontend_switches_on() {
         "settings",
         "import",
         "import-folder",
-        "missing",
         "info",
         "sub",
         "fullscreen",
@@ -65,6 +64,12 @@ fn the_menu_builds_and_carries_the_ids_the_frontend_switches_on() {
             "no item with id {id}; got {found:?}"
         );
     }
+    // The Missing File Manager item is compiled out while its pane is hidden
+    // (`MISSING_FILE_MANAGER` in menu.rs); the test used to demand it anyway.
+    assert!(
+        !found.iter().any(|f| f == "missing"),
+        "the hidden Missing File Manager item is in the menu; got {found:?}"
+    );
 }
 
 #[cfg(target_os = "macos")]

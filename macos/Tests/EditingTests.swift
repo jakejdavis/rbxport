@@ -54,7 +54,7 @@ struct EditingTests {
         model.protectLibrary = false
         #expect(await eventually { !model.isReadOnly })
         #expect(await backend.protectCalls == [true, false])
-        #expect(model.layoutStore.defaults.object(forKey: AppModel.protectLibraryKey) as? Bool == false)
+        #expect(model.layoutStore.defaults.object(forKey: PrefKeys.protectLibrary) as? Bool == false)
         model.protectLibrary = true
         #expect(await eventually { model.isReadOnly })
     }
