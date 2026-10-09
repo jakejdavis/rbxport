@@ -45,8 +45,8 @@ struct LibraryProblemInfo: Equatable, Sendable {
         switch problem {
         case .missing(let masterDb):
             return LibraryProblemInfo(
-                kind: .missing, title: "No rekordbox Library",
-                message: "rekordbox isn't installed and there is no rekordbox database. Would you like to create a new database?",
+                kind: .missing, title: L10n.t("No rekordbox Library"),
+                message: L10n.t("rekordbox isn't installed and there is no rekordbox database. Would you like to create a new database?"),
                 path: masterDb, hint: "A new library is empty. rbxport makes it the way rekordbox would, so rekordbox can open it later.",
                 actions: [.createLibrary, .retry, .quit])
         case .failed(let message):
@@ -239,10 +239,10 @@ struct LibraryProblemView: View {
 
     static func title(_ action: ProblemAction) -> String {
         switch action {
-        case .retry: "Try Again"
+        case .retry: L10n.t("Try Again")
         case .createLibrary: "Create New Library\u{2026}"
         case .showLog: "Show Log\u{2026}"
-        case .quit: "Quit"
+        case .quit: L10n.t("Quit")
         }
     }
 
@@ -297,7 +297,7 @@ struct NewLibrarySheet: View {
                 if model.isCreating { ProgressView().controlSize(.small) }
                 Spacer()
                 Button("Cancel", role: .cancel) { model.cancel() }.disabled(model.isCreating)
-                Button(model.isCreating ? "Creating\u{2026}" : "Create") { Task { await model.create() } }
+                Button(model.isCreating ? L10n.t("Creating\u{2026}") : L10n.t("Create")) { Task { await model.create() } }
                     .keyboardShortcut(.defaultAction).disabled(!model.canCreate)
                     .accessibilityIdentifier("newlibrary-create")
             }

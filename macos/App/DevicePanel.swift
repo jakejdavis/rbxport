@@ -295,7 +295,7 @@ private struct GeneralTabView: View {
     @FocusState private var nameFocused: Bool
 
     private var libraries: String {
-        [settings.hasDeviceLibrary ? "Device Library" : nil, settings.hasOneLibrary ? "OneLibrary" : nil]
+        [settings.hasDeviceLibrary ? L10n.t("Device Library") : nil, settings.hasOneLibrary ? L10n.t("OneLibrary") : nil]
             .compactMap { $0 }.joined(separator: ", ")
     }
 
@@ -325,8 +325,8 @@ private struct GeneralTabView: View {
             }
             .pickerStyle(.radioGroup)
             Picker("Overview waveform", selection: .constant(settings.overviewWaveform)) {
-                Text("Half waveform").tag(StickOverview.half)
-                Text("Full waveform").tag(StickOverview.full)
+                Text("Half Waveform").tag(StickOverview.half)
+                Text("Full Waveform").tag(StickOverview.full)
             }
             .pickerStyle(.radioGroup)
             .disabled(true)
@@ -344,10 +344,10 @@ private struct GeneralTabView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section {
-                LabeledContent("Total space", value: device.totalBytes > 0 ? CellFormat.bytes(device.totalBytes) : "Unknown")
-                LabeledContent("Available space", value: device.totalBytes > 0 ? CellFormat.bytes(device.freeBytes) : "Unknown")
+                LabeledContent("Total Space", value: device.totalBytes > 0 ? CellFormat.bytes(device.totalBytes) : L10n.t("Unknown"))
+                LabeledContent("Available Space", value: device.totalBytes > 0 ? CellFormat.bytes(device.freeBytes) : L10n.t("Unknown"))
                 LabeledContent("Libraries", value: libraries.isEmpty ? "None" : libraries)
-                LabeledContent("File system", value: device.fileSystem.isEmpty ? "Unknown" : device.fileSystem)
+                LabeledContent("File system", value: device.fileSystem.isEmpty ? L10n.t("Unknown") : device.fileSystem)
                 LabeledContent("Contents", value: device.contentsText)
             }
             if device.hasUnusualFileSystem {
@@ -359,7 +359,7 @@ private struct GeneralTabView: View {
                     Picker("Playlist", selection: Binding(get: { chosen ?? playlists.first?.id ?? "" }, set: { chosen = $0 })) {
                         ForEach(playlists, id: \.id) { Text($0.title).tag($0.id) }
                     }
-                    Button(busy ? "Exporting\u{2026}" : "Export") {
+                    Button(busy ? "Exporting\u{2026}" : L10n.t("Export")) {
                         if let id = chosen ?? playlists.first?.id { exportPlaylist(id) }
                     }
                     .disabled(busy || playlists.isEmpty)

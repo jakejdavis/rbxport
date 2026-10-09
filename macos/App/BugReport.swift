@@ -117,7 +117,7 @@ final class BugReportModel {
 
     func revealLog() {
         guard let path = report?.system.logPath else {
-            message = "No application log was found."
+            message = L10n.t("No application log was found.")
             return
         }
         revealFile(URL(fileURLWithPath: path))

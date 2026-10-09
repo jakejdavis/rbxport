@@ -7,12 +7,12 @@ enum SidebarSection: String, CaseIterable, Sendable {
 
     var title: String {
         switch self {
-        case .playlists: "Playlists"
-        case .histories: "Histories"
-        case .explorer: "Explorer"
-        case .itunes: "iTunes"
-        case .devices: "Devices"
-        case .tagList: "Tag List"
+        case .playlists: L10n.t("Playlists")
+        case .histories: L10n.t("Histories")
+        case .explorer: L10n.t("Explorer")
+        case .itunes: L10n.t("iTunes")
+        case .devices: L10n.t("Devices")
+        case .tagList: L10n.t("Tag List")
         }
     }
 }
@@ -57,6 +57,17 @@ final class SidebarNode {
     }
 
     var isSection: Bool { if case .section = kind { true } else { false } }
+
+    /// The name as drawn: the fixed rows (sections, All Tracks, Tag List) are translated;
+    /// a playlist, folder, device or history keeps the name it was given.
+    var displayName: String {
+        switch kind {
+        case .section(let section): section.title
+        case .allTracks: L10n.t("All Tracks")
+        case .tagList: L10n.t("Tag List")
+        default: name
+        }
+    }
 
     var isExplorerDirectory: Bool { kind == .explorerRoot || kind == .explorerFolder }
 

@@ -26,7 +26,7 @@ struct Dialogs {
             alert.messageText = message
             alert.informativeText = detail
             alert.addButton(withTitle: button)
-            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: L10n.t("Cancel"))
             return alert.runModal() == .alertFirstButtonReturn
         },
         chooseAudio: { prompt, directories in
@@ -63,7 +63,7 @@ struct Dialogs {
             alert.alertStyle = .informational
             alert.messageText = message
             alert.informativeText = detail
-            alert.addButton(withTitle: "OK")
+            alert.addButton(withTitle: L10n.t("OK"))
             _ = alert.runModal()
         })
 }

@@ -52,7 +52,7 @@ struct LinkDeckStrip: View {
         .disabled(model.busy)
         .help(model.buttonHelp)
         .accessibilityIdentifier("link-button")
-        .accessibilityValue(model.isBlocked ? "unavailable" : model.isOn ? "on" : "off")
+        .accessibilityValue(model.isBlocked ? L10n.t("unavailable") : model.isOn ? L10n.t("on") : L10n.t("off"))
         .popover(isPresented: $explaining, arrowEdge: .top) {
             Text(model.status?.problem ?? "")
                 .font(.callout).padding(12).frame(maxWidth: 320, alignment: .leading)
@@ -83,16 +83,16 @@ private struct MasterClock: View {
                 .toggleStyle(.button).font(.caption.weight(.bold)).tint(.orange)
                 .help(
                     status.master
-                        ? "This computer is the tempo master. Click to resign."
-                        : "Make this computer the tempo master; players set to SYNC follow this tempo."
+                        ? L10n.t("This computer is the tempo master. Click to resign.")
+                        : L10n.t("Make this computer the tempo master; players set to SYNC follow this tempo.")
                 )
                 .accessibilityIdentifier("link-master")
             Button { Task { await model.takeMasterTempo() } } label: { Image(systemName: "arrow.triangle.2.circlepath") }
                 .disabled(!model.canTakeTempo)
                 .help(
                     model.canTakeTempo
-                        ? "Take the current master player's tempo as the master tempo."
-                        : "No player is master, so there is no tempo to take."
+                        ? L10n.t("Take the current master player's tempo as the master tempo.")
+                        : L10n.t("No player is master, so there is no tempo to take.")
                 )
                 .accessibilityLabel("Take the master player's tempo")
                 .accessibilityIdentifier("link-take-tempo")
@@ -112,7 +112,7 @@ private struct DeckTile: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
                 Text("\(player.number)").font(.caption.weight(.bold))
-                Text(player.playing ? "PLAY" : player.cued ? "CUE" : " ")
+                Text(player.playing ? L10n.t("PLAY") : player.cued ? L10n.t("CUE") : " ")
                     .font(.system(size: 9, weight: .bold)).foregroundStyle(player.playing ? Color.green : .orange)
                     .frame(minWidth: 24, alignment: .leading)
                 lamp("MASTER", on: player.master, colour: .orange)
@@ -125,7 +125,7 @@ private struct DeckTile: View {
                     Text(loaded.artist).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
                 }
             } else {
-                Text(targeted ? "Drop to load" : "No track").font(.caption).foregroundStyle(.tertiary)
+                Text(targeted ? L10n.t("Drop to load") : "No track").font(.caption).foregroundStyle(.tertiary)
             }
         }
         .padding(.horizontal, 8).padding(.vertical, 4)
@@ -160,7 +160,7 @@ private struct MixerTile: View {
 
     var body: some View {
         VStack(spacing: 2) {
-            Text(device.kind == .mixer ? "MIXER" : device.name).font(.caption.weight(.semibold))
+            Text(device.kind == .mixer ? L10n.t("MIXER") : device.name).font(.caption.weight(.semibold))
             Text("MASTER").font(.system(size: 9, weight: .bold))
                 .foregroundStyle(device.master ? Color.orange : Color.secondary.opacity(0.35))
         }
@@ -230,7 +230,7 @@ struct LinkPane: View {
                 LabeledContent {
                     // A refusal cannot be cleared by pressing the button again; the reason says what to do.
                     if !(model.isBlocked && !model.isOn) {
-                        Button(model.busy ? "Please wait\u{2026}" : model.isOn ? "Disconnect" : "Connect to PRO DJ LINK") {
+                        Button(model.busy ? L10n.t("Please wait\u{2026}") : model.isOn ? L10n.t("Disconnect") : L10n.t("Connect to PRO DJ LINK")) {
                             Task { await model.toggle() }
                         }
                         .disabled(model.busy || model.status == nil)
@@ -263,8 +263,8 @@ struct LinkPane: View {
             }
             Section("Network interface") {
                 Text(model.isOn
-                    ? "Disconnect to change the network interface."
-                    : "Choose the network your players are connected to. Wired Ethernet is recommended.")
+                    ? L10n.t("Disconnect to change the network interface.")
+                    : L10n.t("Choose the network your players are connected to. Wired Ethernet is recommended."))
                     .font(.caption).foregroundStyle(.secondary)
                 interfaceTable
             }
@@ -293,7 +293,7 @@ struct LinkPane: View {
 
     private var summaryLine: String {
         if model.isOn, let interface = model.status?.interface { return "Using \(interface.name) \u{00B7} \(interface.address)" }
-        return "Share your library with players on your network."
+        return L10n.t("Share your library with players on your network.")
     }
 
     private var interfaces: [LinkInterface] { model.status?.interfaces ?? [] }
@@ -310,19 +310,19 @@ struct LinkPane: View {
 
     private var interfaceTable: some View {
         VStack(alignment: .leading, spacing: 6) {
-            row(name: "Automatic", detail: "Let the app choose the interface", selected: model.interface == nil, badge: nil) {
+            row(name: L10n.t("Automatic"), detail: L10n.t("Let the app choose the interface"), selected: model.interface == nil, badge: nil) {
                 model.interface = nil
             }
             ForEach(interfaces, id: \.name) { item in
                 let inUse = model.isOn && model.status?.interface?.name == item.name && model.status?.interface?.address == item.address
                 row(
                     name: item.name,
-                    detail: "\(Self.connection(item.connection))\(item.connection == .wired ? " (Recommended)" : "") \u{00B7} \(item.adapter ?? "Unknown") \u{00B7} \(item.address)",
-                    selected: model.interface == item.name, badge: inUse ? "In use" : nil
+                    detail: "\(Self.connection(item.connection))\(item.connection == .wired ? " (Recommended)" : "") \u{00B7} \(item.adapter ?? L10n.t("Unknown")) \u{00B7} \(item.address)",
+                    selected: model.interface == item.name, badge: inUse ? L10n.t("In use") : nil
                 ) { model.interface = item.name }
             }
             if let saved = model.interface, !interfaces.contains(where: { $0.name == saved }) {
-                row(name: saved, detail: "Not present", selected: true, badge: nil) {}
+                row(name: saved, detail: L10n.t("Not present"), selected: true, badge: nil) {}
             }
         }
         .disabled(!canChoose)
@@ -332,9 +332,9 @@ struct LinkPane: View {
 
     static func connection(_ connection: LinkConnection?) -> String {
         switch connection {
-        case .wireless: "Wi-Fi"
-        case .wired: "Wired"
-        case nil: "Unknown"
+        case .wireless: L10n.t("Wi-Fi")
+        case .wired: L10n.t("Wired")
+        case nil: L10n.t("Unknown")
         }
     }
 
@@ -375,11 +375,11 @@ struct LinkPane: View {
             }
         } else {
             VStack(alignment: .leading, spacing: 2) {
-                Text(model.isOn ? "No devices found yet" : "Discover your devices").fontWeight(.medium)
+                Text(model.isOn ? L10n.t("No devices found yet") : L10n.t("Discover your devices")).fontWeight(.medium)
                 Text(
                     model.isOn
-                        ? "Turn on your players and mixers, then connect them to the network shown above."
-                        : "Choose a network interface and connect to see your players and mixers here."
+                        ? L10n.t("Turn on your players and mixers, then connect them to the network shown above.")
+                        : L10n.t("Choose a network interface and connect to see your players and mixers here.")
                 )
                 .font(.caption).foregroundStyle(.secondary)
             }
@@ -391,13 +391,13 @@ struct LinkPane: View {
             switch player.kind {
             case .player: "player"
             case .mixer: "mixer"
-            case .rekordbox: "rekordbox"
+            case .rekordbox: L10n.t("rekordbox")
             case .device: "device"
             }
         return "\(kind) \(player.number)"
     }
 
     static func deviceStatus(_ player: LinkPlayer) -> String {
-        player.loaded != nil ? (player.playing ? "Playing" : "Loaded") : "Online"
+        player.loaded != nil ? (player.playing ? L10n.t("Playing") : L10n.t("Loaded")) : L10n.t("Online")
     }
 }

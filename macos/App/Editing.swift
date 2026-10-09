@@ -180,8 +180,8 @@ extension AppModel {
     var canEdit: Bool { !isReadOnly }
     var canUndo: Bool { editHistory.canUndo && canEdit }
     var canRedo: Bool { editHistory.canRedo && canEdit }
-    var undoMenuTitle: String { editHistory.undoLabel.map { "Undo \($0)" } ?? "Undo" }
-    var redoMenuTitle: String { editHistory.redoLabel.map { "Redo \($0)" } ?? "Redo" }
+    var undoMenuTitle: String { editHistory.undoLabel.map { "\(L10n.t("Undo")) \($0)" } ?? L10n.t("Undo") }
+    var redoMenuTitle: String { editHistory.redoLabel.map { "\(L10n.t("Redo")) \($0)" } ?? L10n.t("Redo") }
 
     /// Runs one edit. A refusal or failure lands verbatim in the status line; nil comes back.
     @discardableResult
@@ -288,7 +288,7 @@ extension AppModel {
 
     func newSmartPlaylist(near node: SidebarNode?) {
         smartEditor = SmartEditorModel(
-            mode: .create(parent: sidebar.parentID(forNewItemNear: node)), name: "Untitled Intelligent List",
+            mode: .create(parent: sidebar.parentID(forNewItemNear: node)), name: L10n.t("Untitled Intelligent List"),
             rule: SmartRule(logic: .all, conditions: []))
         loadMyTags(for: smartEditor)
     }
@@ -445,7 +445,7 @@ extension AppModel {
             _ = await performEdit { try await backend.setTrackComment(ids: [ids[0]], comment: "Warm-up opener, long intro") }
             _ = await performEdit { try await backend.setTrackField(ids: [ids[1]], field: .genre, value: "Deep House") }
             _ = await performEdit { try await backend.addToTagList(ids: [ids[3], ids[4]]) }
-            notice = "Comment saved."
+            notice = L10n.t("Comment saved.")
             info.tab = .info
             infoPanelOpen = true
         case "duplicates":

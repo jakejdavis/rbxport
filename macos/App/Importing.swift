@@ -93,7 +93,7 @@ extension AppModel {
     /// File > Import > Track and Folder.
     func importFromPanel(folders: Bool) async {
         let urls = await dialogs.chooseAudio(
-            folders ? "Add a folder of music to the library" : "Add music to the library", folders)
+            folders ? L10n.t("Add a folder of music to the library") : L10n.t("Add music to the library"), folders)
         await importFiles(urls)
     }
 

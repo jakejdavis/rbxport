@@ -15,7 +15,7 @@ struct SettingsView: View {
         TabView(selection: $tab) {
             ForEach(SettingsTab.allCases) { item in
                 pane(item)
-                    .tabItem { Label(item.title, systemImage: item.symbol) }
+                    .tabItem { Label(L10n.t(item.title), systemImage: item.symbol) }
                     .tag(item.rawValue)
             }
         }
@@ -85,7 +85,7 @@ extension View {
             Divider()
             HStack {
                 Spacer()
-                Button("Reset to Defaults") { prefs.reset(pane) }
+                Button("Reset to defaults") { prefs.reset(pane) }
                     .accessibilityIdentifier("reset-\(pane.rawValue)")
             }
             .padding(.vertical, 10).padding(.horizontal, 20)
@@ -104,6 +104,13 @@ struct ViewPane: View {
 
     var body: some View {
         Form {
+            Section("Language") {
+                Picker("Language", selection: $prefs.locale) {
+                    // Each language is named in itself, whatever the current one is.
+                    ForEach(L10n.choices) { Text(verbatim: $0.label).tag($0.code) }
+                }
+                note("The menu bar and this window change at once. The app menu and system dialogs follow after you restart.")
+            }
             Section("Display") {
                 Picker("Key display format", selection: $prefs.keyDisplay) {
                     Text("Classic (Am, Ebm)").tag(KeyStyle.classic)
@@ -171,15 +178,15 @@ struct DjSystemPane: View {
                 Picker("Waveform color on CDJ", selection: $prefs.djWaveformColor) {
                     Text("Blue").tag(DjWaveformColor.blue)
                     Text("RGB").tag(DjWaveformColor.rgb)
-                    Text("3 Band").tag(DjWaveformColor.threeBand)
+                    Text("3Band").tag(DjWaveformColor.threeBand)
                 }
-                Picker("Waveform current position", selection: $prefs.djWaveformPosition) {
+                Picker("Waveform Current Position", selection: $prefs.djWaveformPosition) {
                     Text("Center").tag(DjWaveformPosition.center)
                     Text("Left").tag(DjWaveformPosition.left)
                 }
                 Picker("Overview", selection: $prefs.djOverview) {
-                    Text("Half waveform").tag(DjOverview.half)
-                    Text("Full waveform").tag(DjOverview.full)
+                    Text("Half Waveform").tag(DjOverview.half)
+                    Text("Full Waveform").tag(DjOverview.full)
                 }
                 Picker("Key display", selection: $prefs.djKeyDisplay) {
                     Text("Classic").tag(DjKeyDisplay.classic)
@@ -202,7 +209,7 @@ struct AdvancedPane: View {
     var body: some View {
         @Bindable var prefs = model.prefs
         Form {
-            Section("Library protection") {
+            Section("Library Protection") {
                 Toggle(
                     "Protect library edit.",
                     isOn: Binding(
@@ -229,13 +236,13 @@ struct AdvancedPane: View {
                 }
                 .pickerStyle(.segmented)
             }
-            Section("BEAT/BPM sync") {
-                Picker("Sync type", selection: $prefs.syncType) {
+            Section("BEAT/BPM SYNC") {
+                Picker("Sync Type", selection: $prefs.syncType) {
                     Text("BEAT SYNC").tag(SyncType.beat)
                     Text("BPM SYNC").tag(SyncType.bpm)
                 }
                 .pickerStyle(.radioGroup)
-                Toggle("Allow BEAT/BPM SYNC with double/half BPM", isOn: $prefs.syncDoubleHalf)
+                Toggle("Allow BEAT/BPM SYNC with double/half BPM.", isOn: $prefs.syncDoubleHalf)
             }
             Section {
                 Toggle("Double-click to edit", isOn: .constant(false)).disabled(true)
@@ -354,7 +361,7 @@ struct KeyboardPane: View {
                 Text("Changed keys are marked. A key taken from another binding leaves that one unbound.")
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Button("Reset to the Preset") { rebinder.resetAll() }
+                Button("Reset to the preset") { rebinder.resetAll() }
                     .disabled(prefs.keyboardOverrides.isEmpty)
                     .accessibilityIdentifier("reset-keyboard")
             }

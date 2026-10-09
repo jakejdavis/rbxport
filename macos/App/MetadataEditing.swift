@@ -7,7 +7,7 @@ import Foundation
 enum TrackColors {
     static let names = ["Pink", "Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple"]
 
-    static func name(_ id: UInt8) -> String { id >= 1 && Int(id) <= names.count ? names[Int(id) - 1] : "None" }
+    static func name(_ id: UInt8) -> String { id >= 1 && Int(id) <= names.count ? L10n.t(names[Int(id) - 1]) : "None" }
 
     static func nsColor(_ id: UInt8) -> NSColor? {
         let rgb: [(Double, Double, Double)] = [
@@ -44,21 +44,21 @@ enum TrackColors {
 enum FieldLabels {
     static func label(_ field: TrackField) -> String {
         switch field {
-        case .title: "Track Title"
-        case .artist: "Artist"
-        case .album: "Album"
-        case .year: "Year"
-        case .trackNumber: "Track number"
-        case .discNumber: "Disc number"
-        case .originalArtist: "Original Artist"
-        case .composer: "Composer"
-        case .remixer: "Remixer"
-        case .lyricist: "Lyricist"
-        case .playCount: "DJ Play Count"
-        case .genre: "Genre"
-        case .label: "Label"
-        case .key: "Key"
-        case .bpm: "BPM"
+        case .title: L10n.t("Track Title")
+        case .artist: L10n.t("Artist")
+        case .album: L10n.t("Album")
+        case .year: L10n.t("Year")
+        case .trackNumber: L10n.t("Track number")
+        case .discNumber: L10n.t("Disc number")
+        case .originalArtist: L10n.t("Original Artist")
+        case .composer: L10n.t("Composer")
+        case .remixer: L10n.t("Remixer")
+        case .lyricist: L10n.t("Lyricist")
+        case .playCount: L10n.t("DJ Play Count")
+        case .genre: L10n.t("Genre")
+        case .label: L10n.t("Label")
+        case .key: L10n.t("Key")
+        case .bpm: L10n.t("BPM")
         }
     }
 }
@@ -71,7 +71,7 @@ enum CellTarget: Equatable, Sendable {
     var label: String {
         switch self {
         case .field(let field): FieldLabels.label(field)
-        case .comment: "Comment"
+        case .comment: L10n.t("Comment")
         }
     }
 }

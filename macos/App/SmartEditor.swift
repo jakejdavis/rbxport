@@ -140,8 +140,8 @@ final class SmartEditorModel: Identifiable {
 
     var title: String {
         switch mode {
-        case .create: "Create New Intelligent Playlist"
-        case .edit: "Edit the Intelligent Playlist"
+        case .create: L10n.t("Create New Intelligent Playlist")
+        case .edit: L10n.t("Edit the Intelligent Playlist")
         }
     }
 
@@ -281,14 +281,14 @@ private struct SmartRowView: View {
                     "Property",
                     selection: Binding(get: { row.property }, set: { editor.changeProperty(row.id, to: $0) })
                 ) {
-                    ForEach(SmartCatalogue.properties, id: \.value) { Text($0.label).tag($0.value) }
+                    ForEach(SmartCatalogue.properties, id: \.value) { Text(L10n.t($0.label)).tag($0.value) }
                 }
                 .labelsHidden().frame(width: 140)
                 Picker(
                     "Operator",
                     selection: Binding(get: { row.op }, set: { editor.changeOperator(row.id, to: $0) })
                 ) {
-                    ForEach(SmartCatalogue.operators(for: row.kind), id: \.value) { Text($0.label).tag($0.value) }
+                    ForEach(SmartCatalogue.operators(for: row.kind), id: \.value) { Text(L10n.t($0.label)).tag($0.value) }
                 }
                 .labelsHidden().frame(width: 150)
                 value
@@ -325,7 +325,7 @@ private struct SmartRowView: View {
             }
             if SmartCatalogue.isRelative(row.op) {
                 Picker("Unit", selection: editor.binding(row.id, \.unit)) {
-                    ForEach(SmartCatalogue.units, id: \.value) { Text($0.label).tag($0.value) }
+                    ForEach(SmartCatalogue.units, id: \.value) { Text(L10n.t($0.label)).tag($0.value) }
                 }
                 .labelsHidden().frame(width: 90)
             }

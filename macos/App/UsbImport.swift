@@ -10,9 +10,9 @@ enum UsbImportKind: String, CaseIterable, Identifiable, Sendable {
 
     var label: String {
         switch self {
-        case .cues: "Cues and beat grids"
-        case .history: "Play history"
-        case .settings: "CDJ/mixer settings"
+        case .cues: L10n.t("Cues and beat grids")
+        case .history: L10n.t("Play history")
+        case .settings: L10n.t("CDJ/mixer settings")
         }
     }
 
@@ -21,7 +21,7 @@ enum UsbImportKind: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .cues: "cues and beat grids"
         case .history: "play history"
-        case .settings: "CDJ/mixer settings"
+        case .settings: L10n.t("CDJ/mixer settings")
         }
     }
 
@@ -198,7 +198,7 @@ extension AppModel {
     /// Opens the Import from USB sheet for a device. Refused when it is gone.
     func openUsbImport(path: String) {
         guard let device = devices.device(path: path) else {
-            notice = "That device is no longer connected."
+            notice = L10n.t("That device is no longer connected.")
             return
         }
         guard !exportJobs.isActive(path: path) else {

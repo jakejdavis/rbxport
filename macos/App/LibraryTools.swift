@@ -147,8 +147,8 @@ struct MissingFilesSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Missing Files").font(.headline)
-            Text(model.isScanning && model.result == nil ? "Checking\u{2026}" : model.summary)
+            Text("Missing files").font(.headline)
+            Text(model.isScanning && model.result == nil ? L10n.t("Checking\u{2026}") : model.summary)
                 .foregroundStyle(.secondary)
             if !model.tracks.isEmpty {
                 List(model.tracks, id: \.id) { track in
@@ -197,8 +197,8 @@ struct DuplicatesSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Find Duplicates").font(.headline)
-            Text(model.isScanning && model.result == nil ? "Looking\u{2026}" : model.summary)
+            Text("Find duplicates").font(.headline)
+            Text(model.isScanning && model.result == nil ? L10n.t("Looking\u{2026}") : model.summary)
                 .foregroundStyle(.secondary)
             if !model.groups.isEmpty {
                 List {

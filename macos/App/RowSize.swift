@@ -9,7 +9,7 @@ enum RowSize: String, CaseIterable, Sendable {
         switch self {
         case .compact: "Compact"
         case .standard: "Standard"
-        case .large: "Large"
+        case .large: L10n.t("Large")
         }
     }
 

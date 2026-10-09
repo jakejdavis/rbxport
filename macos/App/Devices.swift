@@ -192,7 +192,7 @@ final class ExportJobsModel {
     func failure(for path: String) -> String? {
         guard let job = jobs[path], job.state == .failed else { return nil }
         return job.title.isEmpty
-            ? "The export failed before the device could be verified. Check that it is connected, writable, and has enough free space."
+            ? L10n.t("The export failed before the device could be verified. Check that it is connected, writable, and has enough free space.")
             : job.title
     }
 
@@ -326,7 +326,7 @@ extension AppModel {
     @discardableResult
     func exportPlaylist(id playlistID: String, to path: String) async -> ExportReport? {
         guard let device = devices.device(path: path) else {
-            notice = "That device is no longer connected."
+            notice = L10n.t("That device is no longer connected.")
             return nil
         }
         guard !exportJobs.isActive(path: path) else {
@@ -355,7 +355,7 @@ extension AppModel {
             return nil
         }
         guard let device = devices.device(path: path) else {
-            notice = "That device is no longer connected."
+            notice = L10n.t("That device is no longer connected.")
             return nil
         }
         guard !exportJobs.isActive(path: path) else {
@@ -375,7 +375,7 @@ extension AppModel {
     }
 
     private func exportFailureText(_ error: Error) -> String {
-        if let ffi = error as? FfiError, case .Cancelled = ffi { return "Export stopped." }
+        if let ffi = error as? FfiError, case .Cancelled = ffi { return L10n.t("Export stopped.") }
         return "Export failed: \(describe(error))"
     }
 

@@ -10,7 +10,7 @@ struct DeckMenu: View {
 
     var body: some View {
         Menu {
-            Menu("Waveform Color") {
+            Menu("Waveform color") {
                 ForEach([WaveformPalette.mono, .colour, .bands], id: \.self) { option in
                     Toggle(option.label, isOn: Binding(get: { palette == option }, set: { _ in player.chooseWaveformPalette(option) }))
                 }
