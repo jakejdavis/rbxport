@@ -27,6 +27,12 @@ pub mod rx3_link;
 pub mod startup;
 pub mod track_data;
 pub mod state;
+pub mod tempo;
+pub mod track_edits;
+pub mod import;
+pub mod maintenance;
+#[cfg(test)]
+mod test_support;
 
 pub use error::{set_internal_error_hook, AppError, AppResult, ErrorKind};
 pub use events::{AppEvent, EventSink, NullSink};

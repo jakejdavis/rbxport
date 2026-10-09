@@ -8,14 +8,14 @@ use std::time::Instant;
 use rbl_app::dto::LibraryProblemDto;
 use rbl_app::error::run_command;
 use rbl_app::state::AppState;
-use rbl_app::{browse, details, edits, explorer, media, startup, track_data, AppError, AppEvent, AppResult, EventSink};
+use rbl_app::{browse, details, edits, explorer, import, maintenance, media, startup, track_data, track_edits, AppError, AppEvent, AppResult, EventSink};
 use rbl_db::{Library as Db, LibraryLocation, OpenMode};
 
 use crate::error::FfiError;
 use crate::events::{EventListener, ListenerSink};
 use crate::playback::{Playback, PlaybackListener};
 use crate::types::{
-    Beat, Cue, Phrase, EditHistory, SmartRule, Device, ExplorerChildren, ExplorerRoot, ExtraColumn, FilterValues, LibraryProblem, PlaylistFileFormat, LibrarySummary, LoadOutcome, Row, TrackDetails, TrackLookups, TreeNode, ViewHandle, ViewSpec, WaveformKind,
+    Beat, Cue, Phrase, EditHistory, SmartRule, TrackField, ImportReport, XmlImportReport, MissingTracks, Duplicates, RelocateReport, Device, ExplorerChildren, ExplorerRoot, ExtraColumn, FilterValues, LibraryProblem, PlaylistFileFormat, LibrarySummary, LoadOutcome, Row, TrackDetails, TrackLookups, TreeNode, ViewHandle, ViewSpec, WaveformKind,
 };
 
 /// Where `load_library` gets the library from.
@@ -329,5 +329,91 @@ impl Core {
     /// Sets the playlist's full track order.
     pub fn reorder_playlist(&self, playlist_id: String, track_ids: Vec<String>) -> Result<(), FfiError> {
         ffi("reorder_playlist", || edits::reorder_playlist(&self.state, &self.sink, &playlist_id, &track_ids)).map(|_| ())
+    }
+
+    // ---- Phase 4b: track metadata, Tag List, history, collection, import, missing files.
+
+    /// Stars 0 to 5 on every track, as one undo step. More than 5 is `Malformed`.
+    pub fn set_track_rating(&self, track_ids: Vec<String>, stars: u8) -> Result<EditHistory, FfiError> {
+        ffi("set_track_rating", || track_edits::set_rating(&self.state, &self.sink, &track_ids, stars)).map(Into::into)
+    }
+
+    pub fn set_track_comment(&self, track_ids: Vec<String>, comment: String) -> Result<EditHistory, FfiError> {
+        ffi("set_track_comment", || track_edits::set_comment(&self.state, &self.sink, &track_ids, &comment)).map(Into::into)
+    }
+
+    /// Colour 1 to 8, or 0 for none. Anything else is `Malformed`.
+    pub fn set_track_color(&self, track_ids: Vec<String>, color: u8) -> Result<EditHistory, FfiError> {
+        ffi("set_track_color", || track_edits::set_color_id(&self.state, &self.sink, &track_ids, color)).map(Into::into)
+    }
+
+    /// Writes an Info-tab field on every track. `Bpm` takes exactly one track and is not undoable.
+    pub fn set_track_field(&self, track_ids: Vec<String>, field: TrackField, value: String) -> Result<EditHistory, FfiError> {
+        ffi("set_track_field", || {
+            if field == TrackField::Bpm {
+                return match track_ids.as_slice() {
+                    [one] => track_edits::set_bpm(&self.state, &self.sink, one, &value),
+                    _ => Err(AppError::new(rbl_app::ErrorKind::Malformed, "Select a single track to change its BPM.")),
+                };
+            }
+            track_edits::set_field(&self.state, &self.sink, &track_ids, field.wire(), &value)
+        })
+        .map(Into::into)
+    }
+
+    /// Returns the new generation.
+    pub fn add_to_tag_list(&self, track_ids: Vec<String>) -> Result<u32, FfiError> {
+        ffi("add_to_tag_list", || track_edits::add_to_tag_list(&self.state, &self.sink, &track_ids))
+    }
+
+    pub fn remove_from_tag_list(&self, track_ids: Vec<String>) -> Result<u32, FfiError> {
+        ffi("remove_from_tag_list", || track_edits::remove_from_tag_list(&self.state, &self.sink, &track_ids))
+    }
+
+    /// Reload Tag: the file's tags read again over each track's row.
+    pub fn reload_tags(&self, track_ids: Vec<String>) -> Result<u32, FfiError> {
+        ffi("reload_tags", || track_edits::reload_tags(&self.state, &self.sink, &track_ids))
+    }
+
+    pub fn reset_play_count(&self, track_ids: Vec<String>) -> Result<EditHistory, FfiError> {
+        ffi("reset_play_count", || track_edits::reset_play_count(&self.state, &self.sink, &track_ids)).map(Into::into)
+    }
+
+    pub fn remove_from_history(&self, history_id: String, track_ids: Vec<String>) -> Result<u32, FfiError> {
+        ffi("remove_from_history", || track_edits::remove_from_history(&self.state, &self.sink, &history_id, &track_ids))
+    }
+
+    /// Permanent: the undo history is cleared. The files stay on disk.
+    pub fn remove_from_collection(&self, track_ids: Vec<String>) -> Result<u32, FfiError> {
+        ffi("remove_from_collection", || track_edits::remove_from_collection(&self.state, &self.sink, &track_ids))
+    }
+
+    /// Imports files and folders. Blocking; raises `ImportProgress` per file.
+    pub fn import_files(&self, paths: Vec<String>) -> Result<ImportReport, FfiError> {
+        ffi("import_files", || import::import_files(&self.state, &self.sink, &paths)).map(Into::into)
+    }
+
+    /// Imports a rekordbox XML collection. Blocking; raises `ImportProgress` per track.
+    pub fn import_xml(&self, path: String) -> Result<XmlImportReport, FfiError> {
+        ffi("import_xml", || import::import_xml(&self.state, &self.sink, &path)).map(Into::into)
+    }
+
+    /// Tracks whose file is gone, bounded to `limit` (the count is exact).
+    pub fn missing_tracks(&self, limit: u32) -> Result<MissingTracks, FfiError> {
+        ffi("missing_tracks", || maintenance::missing_tracks(&self.state, limit)).map(Into::into)
+    }
+
+    pub fn find_duplicates(&self, limit: u32) -> Result<Duplicates, FfiError> {
+        ffi("find_duplicates", || maintenance::find_duplicates(&self.state, limit)).map(Into::into)
+    }
+
+    /// Points a track at another file.
+    pub fn relocate_track(&self, track_id: String, path: String) -> Result<u32, FfiError> {
+        ffi("relocate_track", || track_edits::relocate_track(&self.state, &self.sink, &track_id, &path))
+    }
+
+    /// Points every missing track at a same-named file under the folders. Blocking.
+    pub fn auto_relocate(&self, folders: Vec<String>) -> Result<RelocateReport, FfiError> {
+        ffi("auto_relocate", || maintenance::auto_relocate(&self.state, &self.sink, &folders)).map(Into::into)
     }
 }

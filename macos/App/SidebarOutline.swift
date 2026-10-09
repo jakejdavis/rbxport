@@ -29,7 +29,7 @@ struct SidebarOutline: NSViewRepresentable {
         outline.delegate = context.coordinator
         outline.menuProvider = { [weak coordinator = context.coordinator] node in coordinator?.menu(for: node) }
         outline.onRename = { [weak coordinator = context.coordinator] in coordinator?.renameSelected() }
-        outline.registerForDraggedTypes([.rbxportSidebarNode, .rbxportTracks])
+        outline.registerForDraggedTypes([.rbxportSidebarNode, .rbxportTracks, .fileURL])
         outline.setDraggingSourceOperationMask(.move, forLocal: true)
         context.coordinator.outline = outline
         model.sidebar.onNodeReloaded = { [weak coordinator = context.coordinator] node in
@@ -253,6 +253,15 @@ struct SidebarOutline: NSViewRepresentable {
                 outlineView.setDropItem(plan.outlineParent, dropChildIndex: plan.outlineIndex)
                 return .move
             }
+            if pasteboard.availableType(from: [.rbxportTracks]) == nil,
+                pasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
+            {
+                // Files from the Finder are imported, and added when dropped on a playlist.
+                guard let node = item as? SidebarNode, index == NSOutlineViewDropOnItemIndex,
+                    node.kind == .playlist || node.kind == .allTracks
+                else { return [] }
+                return .copy
+            }
             if pasteboard.availableType(from: [.rbxportTracks]) != nil {
                 // Tracks land on an ordinary playlist (a smart one is its rule; a folder holds none).
                 guard let node = item as? SidebarNode, node.kind == .playlist, index == NSOutlineViewDropOnItemIndex
@@ -271,6 +280,13 @@ struct SidebarOutline: NSViewRepresentable {
                 let plan = sidebar.movePlan(dragging: dragged, onto: item as? SidebarNode, childIndex: index)
             {
                 Task { await model.move(dragged, to: plan) }
+                return true
+            }
+            if pasteboard.availableType(from: [.rbxportTracks]) == nil,
+                let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+                !urls.isEmpty, let node = item as? SidebarNode
+            {
+                Task { await model.dropFiles(urls, on: node) }
                 return true
             }
             let tracks = NSPasteboard.PasteboardType.trackIDs(from: pasteboard)
@@ -321,6 +337,7 @@ enum MenuBuilder {
             case .item(let spec):
                 let item = ClosureMenuItem(title: spec.title)
                 item.isEnabled = spec.isEnabled
+                if let dot = spec.colorDot { item.image = TrackColors.dot(dot) }
                 if let submenu = spec.submenu {
                     item.submenu = Self.menu(submenu, handler: handler)
                 } else if let command = spec.command {

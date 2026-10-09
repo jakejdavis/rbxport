@@ -37,7 +37,7 @@ struct TrackTable: NSViewRepresentable {
             guard let model, model.openPlaylistID != nil, !model.selectedIDs.isEmpty else { return }
             Task { await model.removeSelectionFromPlaylist() }
         }
-        table.registerForDraggedTypes([.rbxportTracks])
+        table.registerForDraggedTypes([.rbxportTracks, .fileURL])
         table.setDraggingSourceOperationMask([.copy, .move], forLocal: true)
         table.draggingDestinationFeedbackStyle = .gap
         context.coordinator.table = table
@@ -192,6 +192,20 @@ struct TrackTable: NSViewRepresentable {
                 autoSelected = true
                 table.selectRowIndexes(IndexSet(integer: n), byExtendingSelection: false)
             }
+            // Dev aid: RBXPORT_EDIT_CELL=<row>:<column> opens that cell's editor (fixture runs only;
+            // it writes nothing until a value is committed).
+            if !autoEdited, let text = ProcessInfo.processInfo.environment["RBXPORT_EDIT_CELL"],
+                ProcessInfo.processInfo.environment["RBXPORT_FIXTURE_DIR"] != nil, model.canEdit,
+                let colon = text.firstIndex(of: ":"), let n = Int(text[..<colon]), range.contains(n),
+                let id = ColumnID(rawValue: String(text[text.index(after: colon)...])),
+                let at = shownIDs().firstIndex(of: id)
+            {
+                autoEdited = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    self?.table?.selectRowIndexes(IndexSet(integer: n), byExtendingSelection: false)
+                    self?.beginEditing(row: n, column: at)
+                }
+            }
             // Dev aids: RBXPORT_LOAD_ROW=<n> loads that row onto deck A (RBXPORT_PLAY=1 also plays it);
             // RBXPORT_PREVIEW_ROW=<n> previews that row from 30%.
             let env = ProcessInfo.processInfo.environment
@@ -242,6 +256,7 @@ struct TrackTable: NSViewRepresentable {
             }
         }
         private var autoSelected = false
+        private var autoEdited = false
         private var autoLoaded = false
         private var autoLoadedB = false
         private var autoPreviewed = false
@@ -265,7 +280,46 @@ struct TrackTable: NSViewRepresentable {
 
         @objc func rowDoubleClicked() {
             guard let table, table.clickedRow >= 0, let row = pager.peek(at: table.clickedRow) else { return }
+            // A double-click on a text column that edits in place (not the title) edits it;
+            // everywhere else it loads the track onto a deck.
+            if table.clickedColumn >= 0,
+                let column = ColumnID(rawValue: table.tableColumns[table.clickedColumn].identifier.rawValue),
+                EditableCells.editsOnDoubleClick(column), model.canEditTrack(row.id)
+            {
+                beginEditing(row: table.clickedRow, column: table.clickedColumn)
+                return
+            }
             model.loadToDeck(trackID: row.id)
+        }
+
+        // MARK: Editing in place
+
+        /// Puts the cell's text into its field. Enter or leaving commits a changed value, Escape restores.
+        func beginEditing(row index: Int, column columnIndex: Int) {
+            guard let table, let data = pager.peek(at: index),
+                let id = ColumnID(rawValue: table.tableColumns[columnIndex].identifier.rawValue),
+                EditableCells.target(for: id) != nil,
+                let cell = table.view(atColumn: columnIndex, row: index, makeIfNecessary: true) as? TextCellView
+            else { return }
+            let model = model
+            let trackID = data.id
+            cell.beginEditing(text: model.editableText(id, row: data)) { [weak table] text in
+                Task { @MainActor in
+                    let done = await model.commitCell(trackID: trackID, column: id, text: text)
+                    // A refused edit puts the stored text back.
+                    if !done, let table {
+                        table.reloadData(forRowIndexes: IndexSet(integer: index), columnIndexes: IndexSet(integer: columnIndex))
+                    }
+                }
+            } restore: { [weak table] in
+                table?.reloadData(forRowIndexes: IndexSet(integer: index), columnIndexes: IndexSet(integer: columnIndex))
+            }
+        }
+
+        /// Star clicks write the rating; a locked library answers with its own message.
+        private func rate(star: UInt8, current: UInt8, id: String) {
+            let model = model
+            Task { await model.clickStar(star, current: current, id: id) }
         }
 
         func loadSelectedToDeck(deck: Deck = .a) {
@@ -301,7 +355,15 @@ struct TrackTable: NSViewRepresentable {
             _ tableView: NSTableView, validateDrop info: NSDraggingInfo, proposedRow row: Int,
             proposedDropOperation dropOperation: NSTableView.DropOperation
         ) -> NSDragOperation {
-            // Reordering is the only drop a table takes: from itself, in a playlist shown in its own order.
+            // Files from the Finder are imported: into the open playlist, or into the collection.
+            if info.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]),
+                info.draggingPasteboard.availableType(from: [.rbxportTracks]) == nil
+            {
+                guard model.canEdit, model.openPlaylistID != nil || model.selectedNodeID == "all" else { return [] }
+                tableView.setDropRow(-1, dropOperation: .on)
+                return .copy
+            }
+            // Reordering is the only other drop a table takes: from itself, in a playlist shown in its own order.
             guard model.canReorderRows, (info.draggingSource as? NSTableView) === tableView,
                 info.draggingPasteboard.availableType(from: [.rbxportTracks]) != nil
             else { return [] }
@@ -313,9 +375,16 @@ struct TrackTable: NSViewRepresentable {
             _ tableView: NSTableView, acceptDrop info: NSDraggingInfo, row: Int,
             dropOperation: NSTableView.DropOperation
         ) -> Bool {
+            let model = model
+            if info.draggingPasteboard.availableType(from: [.rbxportTracks]) == nil,
+                let urls = info.draggingPasteboard.readObjects(
+                    forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty
+            {
+                Task { await model.dropFilesOnTable(urls) }
+                return true
+            }
             let ids = NSPasteboard.PasteboardType.trackIDs(from: info.draggingPasteboard)
             guard !ids.isEmpty else { return false }
-            let model = model
             Task { await model.reorderRows(carried: ids, insertionRow: row) }
             return true
         }
@@ -345,8 +414,10 @@ struct TrackTable: NSViewRepresentable {
                 cell.show(row: data, service: model.artwork)
                 return cell
             case .rating:
-                let cell = reusable(tableView, column.identifier) { TextCellView() }
+                let cell = reusable(tableView, column.identifier) { RatingCellView() }
                 cell.show(stars: data?.rating, alignment: .left)
+                cell.trackID = data?.id
+                cell.onRate = { [weak self] star, current, id in self?.rate(star: star, current: current, id: id) }
                 return cell
             default:
                 let spec = ColumnCatalogue.spec(for: id)
@@ -550,8 +621,10 @@ final class TrackNSTableView: NSTableView {
     }
 }
 
-class TextCellView: NSTableCellView {
-    private let label = NSTextField(labelWithString: "")
+class TextCellView: NSTableCellView, NSTextFieldDelegate {
+    fileprivate let label = NSTextField(labelWithString: "")
+    private var editing: (original: String, commit: (String) -> Void, restore: () -> Void)?
+    private var cancelled = false
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -567,6 +640,40 @@ class TextCellView: NSTableCellView {
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// Edits the text in place. `commit` gets a changed value; `restore` runs when nothing was changed.
+    func beginEditing(text: String, commit: @escaping (String) -> Void, restore: @escaping () -> Void) {
+        editing = (text, commit, restore)
+        cancelled = false
+        label.stringValue = text
+        label.isEditable = true
+        label.isSelectable = true
+        label.delegate = self
+        label.drawsBackground = true
+        label.backgroundColor = .textBackgroundColor
+        label.focusRingType = .default
+        window?.makeFirstResponder(label)
+        label.currentEditor()?.selectAll(nil)
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        guard selector == #selector(NSResponder.cancelOperation(_:)) else { return false }
+        cancelled = true
+        window?.makeFirstResponder(superview)
+        return true
+    }
+
+    func controlTextDidEndEditing(_ notification: Notification) {
+        guard let editing else { return }
+        self.editing = nil
+        let text = label.stringValue
+        label.isEditable = false
+        label.isSelectable = false
+        label.drawsBackground = false
+        label.delegate = nil
+        if !cancelled, text != editing.original { editing.commit(text) } else { editing.restore() }
+        if let table = enclosingScrollView?.documentView { window?.makeFirstResponder(table) }
+    }
 
     func show(text: String, id: ColumnID, alignment: NSTextAlignment) {
         label.font = ColumnSizer.font(for: id)
@@ -600,6 +707,37 @@ class TextCellView: NSTableCellView {
                     ]))
         }
         label.attributedStringValue = text
+    }
+}
+
+/// The Rating column: stars that rate when clicked. The lit star clears.
+final class RatingCellView: TextCellView {
+    var trackID: String?
+    /// Called with the star clicked (1 to 5), the rating now, and the track.
+    var onRate: ((UInt8, UInt8, String) -> Void)?
+    private var rating: UInt8 = 0
+
+    override func show(stars rating: UInt8?, alignment: NSTextAlignment) {
+        self.rating = rating ?? 0
+        super.show(stars: rating, alignment: alignment)
+    }
+
+    static var starWidthForTests: CGFloat { starWidth }
+    private static let starWidth: CGFloat = ("\u{2605}" as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11)]).width
+
+    /// The star under `x`, counted from the cell's left edge (the label sits 4 pt in).
+    static func star(atX x: CGFloat) -> UInt8? {
+        let index = Int(((x - 4) / starWidth).rounded(.down)) + 1
+        return x >= 4 && (1...5).contains(index) ? UInt8(index) : nil
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let x = convert(event.locationInWindow, from: nil).x
+        if let id = trackID, !AppModel.isLoose(id), let star = Self.star(atX: x) {
+            onRate?(star, rating, id)
+            return
+        }
+        super.mouseDown(with: event)
     }
 }
 

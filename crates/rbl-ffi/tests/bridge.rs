@@ -382,3 +382,80 @@ fn editing_is_locked_by_default_and_opens_with_the_protection_setting() {
     assert!(seen.iter().any(|e| matches!(e, LibraryEvent::EditHistoryChanged { .. })));
     assert!(seen.iter().any(|e| matches!(e, LibraryEvent::LibraryChanged { .. })));
 }
+
+#[test]
+fn metadata_edits_validate_emit_and_undo_over_the_bridge() {
+    use rbl_ffi::TrackField;
+    let (_dir, core, events) = core();
+    let t = vec![rbl_db::fixture::track_id(1)];
+    assert!(matches!(core.set_track_rating(t.clone(), 3), Err(FfiError::ReadOnly { .. })));
+    core.set_protect_library(false);
+    let history = core.set_track_rating(t.clone(), 3).unwrap();
+    assert_eq!(history.undo_label.as_deref(), Some("Track Edit"));
+    assert_eq!(core.track_details(t[0].clone()).unwrap().rating, 3);
+    assert!(matches!(core.set_track_rating(t.clone(), 6), Err(FfiError::Malformed { .. })));
+    assert!(matches!(core.set_track_color(t.clone(), 9), Err(FfiError::Malformed { .. })));
+    core.set_track_color(t.clone(), 4).unwrap();
+    core.set_track_comment(t.clone(), "hello".into()).unwrap();
+    core.set_track_field(t.clone(), TrackField::Year, "2001".into()).unwrap();
+    let d = core.track_details(t[0].clone()).unwrap();
+    assert_eq!((d.color.as_str(), d.comment.as_str(), d.year), ("4", "hello", 2001));
+    let err = core.set_track_field(t.clone(), TrackField::Bpm, "20".into()).unwrap_err();
+    assert!(matches!(err, FfiError::Malformed { ref message, .. } if message == "Enter a BPM from 40 to 499."));
+    assert!(matches!(
+        core.set_track_field(vec![t[0].clone(), rbl_db::fixture::track_id(2)], TrackField::Bpm, "128".into()),
+        Err(FfiError::Malformed { .. })
+    ));
+    core.undo().unwrap();
+    assert_eq!(core.track_details(t[0].clone()).unwrap().year, 0);
+
+    core.add_to_tag_list(t.clone()).unwrap();
+    core.remove_from_tag_list(t).unwrap();
+    let seen = events.0.lock().unwrap();
+    assert_eq!(seen.iter().filter(|e| matches!(e, LibraryEvent::TagListChanged { .. })).count(), 2);
+}
+
+#[test]
+fn files_import_with_progress_and_missing_files_relocate_over_the_bridge() {
+    let (dir, core, events) = core();
+    core.set_protect_library(false);
+    let audio = dir.path().join("incoming");
+    std::fs::create_dir_all(&audio).unwrap();
+    // A small genuine WAV copied from nowhere real: generated here.
+    let data_len = 44_100_u32 * 2;
+    let mut wav = Vec::new();
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data_len).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16_u32.to_le_bytes());
+    wav.extend_from_slice(&1_u16.to_le_bytes());
+    wav.extend_from_slice(&1_u16.to_le_bytes());
+    wav.extend_from_slice(&44_100_u32.to_le_bytes());
+    wav.extend_from_slice(&88_200_u32.to_le_bytes());
+    wav.extend_from_slice(&2_u16.to_le_bytes());
+    wav.extend_from_slice(&16_u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_len.to_le_bytes());
+    wav.resize(44 + data_len as usize, 0);
+    std::fs::write(audio.join("one.wav"), &wav).unwrap();
+
+    let report = core.import_files(vec![audio.display().to_string()]).unwrap();
+    assert_eq!((report.imported, report.tracks.len(), report.existing.len()), (1, 1, 0));
+    assert_eq!(core.summary().unwrap().track_count, 41);
+    let progress = events.0.lock().unwrap().iter().filter(|e| matches!(e, LibraryEvent::ImportProgress { .. })).count();
+    assert_eq!(progress, 1);
+    let again = core.import_files(vec![audio.display().to_string()]).unwrap();
+    assert_eq!((again.imported, again.existing.len()), (0, 1));
+
+    let missing = core.missing_tracks(10).unwrap();
+    assert_eq!((missing.total, missing.tracks.len()), (40, 10));
+    let found = audio.join("track000.mp3");
+    std::fs::write(&found, b"x").unwrap();
+    let relocated = core.auto_relocate(vec![audio.display().to_string()]).unwrap();
+    assert_eq!((relocated.relocated, relocated.unresolved), (1, 39));
+    core.relocate_track(rbl_db::fixture::track_id(1), found.display().to_string()).unwrap();
+    assert_eq!(core.missing_tracks(1).unwrap().total, 38);
+    assert_eq!(core.find_duplicates(5).unwrap().groups, 0);
+    core.remove_from_collection(vec![rbl_db::fixture::track_id(2)]).unwrap();
+    assert_eq!(core.summary().unwrap().track_count, 40);
+}
