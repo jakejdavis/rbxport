@@ -67,11 +67,11 @@ pub fn save(app: &tauri::AppHandle) {
 
     for id in &selection.ids {
         if let Some(relative) = library.artwork_path_of(id).filter(|path| !path.is_empty()) {
-            if let Some(source) = crate::protocol::resolve_under(&share, relative) {
+            if let Some(source) = rbl_app::media::resolve_under(&share, relative) {
                 let _ = copy_bounded(&source, &next.join("artwork").join(id), crate::protocol::MAX_BYTES);
             }
         }
-        if let Ok(bytes) = crate::commands::waveform_bytes(
+        if let Ok(bytes) = rbl_app::media::waveform_bytes(
             &library,
             &share,
             id,

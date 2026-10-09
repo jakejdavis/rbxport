@@ -25,6 +25,7 @@ pub use types::{
     BpmFilter, CountedBpm, CountedKey, Device, DeviceExport, EditHistory, ExplorerChildren, ExplorerRoot, ExtraColumn,
     FilterValues, PlaylistFileFormat, TagCategory, TrackFilter, ExtraFields, HotCue, LibraryProblem, LibrarySummary, LoadOutcome, NodeKind, Row,
     SearchField, SortKey,
+    TrackDetails, TrackLookups, MyTag, MyTagCategory, WaveformKind,
     TrackSource, TreeNode, ViewHandle, ViewSpec,
 };
 

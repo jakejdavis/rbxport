@@ -90,8 +90,29 @@ final class AppModel {
         let epoch: Int
     }
 
-    /// Whether the info panel is shown (Show information). Slice 2c builds the panel itself.
-    var infoPanelOpen = false
+    /// Whether the info panel is shown (Show information, View > Show Information). Persisted.
+    var infoPanelOpen: Bool {
+        didSet {
+            guard infoPanelOpen != oldValue else { return }
+            layoutStore.defaults.set(infoPanelOpen, forKey: "infoPanel.open")
+            info.setActive(infoPanelOpen)
+        }
+    }
+    let info: InfoPanelModel
+    let artwork: ArtworkService
+    let waveforms: WaveformService
+
+    /// How tall rows are when the Artwork or Preview column is shown. Persisted.
+    var rowSize: RowSize {
+        didSet { if rowSize != oldValue { layoutStore.defaults.set(rowSize.rawValue, forKey: "rowSize") } }
+    }
+    /// The palette the Preview column draws in. Persisted.
+    var waveformPalette: WaveformPalette {
+        didSet { if waveformPalette != oldValue { layoutStore.defaults.set(waveformPalette.rawValue, forKey: "waveformPalette") } }
+    }
+
+    /// The height of table rows for the shown columns: compact unless a column draws images.
+    var rowHeight: CGFloat { RowSize.height(for: layout, preference: rowSize) }
     /// Reveals files in the Finder; replaced in tests.
     var reveal: ([URL]) -> Void = { NSWorkspace.shared.activateFileViewerSelecting($0) }
     var query = "" {
@@ -143,6 +164,14 @@ final class AppModel {
         pager = RowPager(backend: backend)
         layout = layoutStore.load(.collection)
         keyStyle = layoutStore.defaults.string(forKey: "keyStyle").flatMap(KeyStyle.init) ?? .classic
+        let defaults = layoutStore.defaults
+        artwork = ArtworkService(backend: backend)
+        waveforms = WaveformService(backend: backend)
+        info = InfoPanelModel(backend: backend, artwork: artwork, defaults: defaults)
+        infoPanelOpen = defaults.bool(forKey: "infoPanel.open")
+        rowSize = defaults.string(forKey: "rowSize").flatMap(RowSize.init) ?? .standard
+        waveformPalette = defaults.string(forKey: "waveformPalette").flatMap(WaveformPalette.init) ?? .bands
+        info.setActive(infoPanelOpen)
     }
 
     /// Starts listening for library events, then loads the library.
@@ -174,6 +203,10 @@ final class AppModel {
             await refresh(selectFirst: true)
         case .libraryChanged:
             // View ids died with the old generation: reload the tree and reopen the selection.
+            // Analysis and artwork may have changed too; the info panel re-reads its record.
+            artwork.removeAll()
+            waveforms.removeAll()
+            info.libraryChanged()
             await refresh(selectFirst: false)
         case .libraryProblem(let problem):
             switch problem {
@@ -273,6 +306,7 @@ final class AppModel {
         selectedIDs = []
         selectionAnchor = nil
         selectionSummary = nil
+        info.selectionChanged([], row: nil)
     }
 
     /// The table's selection changed to these row indexes. Loaded rows map to ids at once;
@@ -341,6 +375,14 @@ final class AppModel {
             selectionAnchor = ids.first
         }
         recomputeSelectionSummary()
+        info.selectionChanged(ids, row: ids.count == 1 ? loadedRow(id: ids.first ?? "") : nil)
+    }
+
+    /// The row for `id` if its page is loaded.
+    private func loadedRow(id: String) -> Row? {
+        var found: Row?
+        pager.forEachLoadedRow { _, row in if found == nil && row.id == id { found = row } }
+        return found
     }
 
     /// Totals the selected tracks that are in loaded pages. Call again when pages load.
@@ -492,6 +534,8 @@ final class AppModel {
 
     /// Show information: opens the info panel on the selection.
     func showInformation() { infoPanelOpen = true }
+
+    func toggleInformation() { infoPanelOpen.toggle() }
 
     /// Exports the playlist behind a source-list node to `url`.
     @discardableResult

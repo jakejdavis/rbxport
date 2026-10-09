@@ -22,6 +22,23 @@ actor MockBackend: BackendProtocol {
     private(set) var deviceCalls = 0
     private(set) var exports: [(playlistID: String, path: String, format: PlaylistFileFormat)] = []
 
+    private(set) var detailCalls: [String] = []
+    private(set) var lookupCalls = 0
+    private(set) var waveformCalls: [(id: String, kind: WaveformKind)] = []
+    private(set) var artworkCalls: [String] = []
+    /// Per-track overrides for the info panel and media calls, set by tests.
+    var detailOverrides: [String: TrackDetails] = [:]
+    /// How long `trackDetails` takes for a track, so a test can make a reply arrive late.
+    var detailDelays: [String: Duration] = [:]
+    var waveformAnswers: [String: Data] = [:]
+    var artworkAnswers: [String: Data] = [:]
+    var artworkDelay: Duration = .zero
+    var waveformDelay: Duration = .zero
+    private(set) var peakWaveformCalls = 0
+    private(set) var peakArtworkCalls = 0
+    private var activeArtworkCalls = 0
+    private var activeWaveformCalls = 0
+
     /// What the explorer, device and filter calls answer, set by tests.
     var explorerRootList: [ExplorerRoot] = [ExplorerRoot(name: "Music", path: "/mock/Music")]
     var explorerFolders: [String: ExplorerChildren] = [
@@ -141,12 +158,66 @@ actor MockBackend: BackendProtocol {
 
     func trackPath(id: String) async throws -> String { "/mock/audio/track-\(id).mp3" }
 
+    func setArtwork(_ data: Data, for id: String) { artworkAnswers[id] = data }
+    func setArtworkDelay(_ delay: Duration) { artworkDelay = delay }
+    func setWaveform(_ data: Data, for id: String) { waveformAnswers[id] = data }
+    func setWaveformDelay(_ delay: Duration) { waveformDelay = delay }
+    func setDetail(_ details: TrackDetails, delay: Duration? = nil) {
+        detailOverrides[details.id] = details
+        detailDelays[details.id] = delay
+    }
+
+    func trackDetails(id: String) async throws -> TrackDetails {
+        detailCalls.append(id)
+        if let delay = detailDelays[id] { try? await Task.sleep(for: delay) }
+        if let override = detailOverrides[id] { return override }
+        guard let n = Int(id), n >= 1, n <= trackCount else {
+            throw FfiError.NotFound(message: "That track is no longer in the library.", detail: nil)
+        }
+        return Self.details(track: n - 1)
+    }
+
+    func trackLookups() async throws -> TrackLookups {
+        lookupCalls += 1
+        return TrackLookups(
+            keys: ["Am", "C"], genres: ["House", "Techno"],
+            myTagCategories: [MyTagCategory(name: "Mood", tags: [MyTag(id: "t1", name: "Peak")])])
+    }
+
+    func waveform(id: String, kind: WaveformKind) async throws -> Data {
+        waveformCalls.append((id, kind))
+        activeWaveformCalls += 1
+        peakWaveformCalls = max(peakWaveformCalls, activeWaveformCalls)
+        defer { activeWaveformCalls -= 1 }
+        if waveformDelay > .zero { try? await Task.sleep(for: waveformDelay) }
+        return waveformAnswers[id] ?? Data()
+    }
+
+    func artwork(id: String) async -> Data? {
+        artworkCalls.append(id)
+        activeArtworkCalls += 1
+        peakArtworkCalls = max(peakArtworkCalls, activeArtworkCalls)
+        defer { activeArtworkCalls -= 1 }
+        if artworkDelay > .zero { try? await Task.sleep(for: artworkDelay) }
+        return artworkAnswers[id]
+    }
+
     func setExplorer(roots: [ExplorerRoot], folders: [String: ExplorerChildren]) {
         explorerRootList = roots
         explorerFolders = folders
     }
 
     func setDevices(_ devices: [Device]) { deviceList = devices }
+
+    static func details(track n: Int) -> TrackDetails {
+        TrackDetails(
+            id: String(n + 1), title: title(n), artist: "Artist \(n % 7)", album: "Album", albumArtist: "", originalArtist: "",
+            composer: "", remixer: "", lyricist: "", genre: "House", label: "", key: "8A", comment: "", mixName: "",
+            message: "", color: "0", rating: UInt8(n % 6), bpmX100: 12_000 + UInt32(n), durationSec: 200, year: 2020,
+            trackNumber: 1, discNumber: 0, playCount: 3, fileType: 1, fileSize: 8_000_000, bitrate: 320,
+            sampleRate: 44_100, bitDepth: 16, dateCreated: "2026-01-02", releaseDate: "", path: "/mock/audio/track-\(n + 1).mp3",
+            hotCueAutoLoad: false, publish: false, hasArtwork: false, myTags: [])
+    }
 
     static func title(_ n: Int) -> String { String(format: "Track %03d", n) }
 

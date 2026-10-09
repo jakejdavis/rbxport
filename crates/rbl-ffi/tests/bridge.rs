@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::assert_is_empty, clippy::similar_names)]
 
 use std::sync::{Arc, Mutex};
 
@@ -314,4 +314,41 @@ fn a_playlist_exports_to_m3u8_and_txt() {
         core.export_playlist_file("999999".into(), txt.to_string_lossy().into_owned(), PlaylistFileFormat::Txt),
         Err(FfiError::NotFound { .. })
     ));
+}
+
+#[test]
+fn details_lookups_waveform_and_artwork_cross_the_bridge() {
+    use rbl_db::fixture::{self, track_id, Shape};
+    let dir = tempfile::tempdir().unwrap();
+    let location = fixture::build(dir.path(), Shape::default()).unwrap();
+    let anlz = location.share_root.join("PIONEER/USBANLZ/ab/ANLZ0000.DAT");
+    std::fs::create_dir_all(anlz.parent().unwrap()).unwrap();
+    let bands: Vec<u8> = (0..300u32).map(|i| u8::try_from(i % 100).unwrap()).collect();
+    std::fs::write(&anlz, rbl_anlz::AnlzBuilder::new().waveform_preview(b"PWAV", &[7; 400]).finish()).unwrap();
+    std::fs::write(anlz.with_extension("2EX"), rbl_anlz::AnlzBuilder::new().waveform_scroll(b"PWV6", 3, &bands).finish()).unwrap();
+    fixture::set_analysis_path(&location, 1, "/PIONEER/USBANLZ/ab/ANLZ0000.DAT").unwrap();
+    let art = location.share_root.join("PIONEER/Artwork/1/a.jpg");
+    std::fs::create_dir_all(art.parent().unwrap()).unwrap();
+    std::fs::write(&art, b"\xFF\xD8x").unwrap();
+    fixture::set_image_path(&location, 2, "/PIONEER/Artwork/1/a.jpg").unwrap();
+    fixture::set_image_path(&location, 3, "/PIONEER/../../x.jpg").unwrap();
+
+    let core = Core::with_fixture(Arc::new(Recorder::default()), dir.path().to_string_lossy().into_owned());
+    assert_eq!(core.load_library(), LoadOutcome::Ready);
+
+    let d = core.track_details(track_id(2)).unwrap();
+    assert_eq!(d.title, "Track 002");
+    assert!(d.has_artwork);
+    assert!(matches!(core.track_details("0".into()), Err(FfiError::NotFound { .. })));
+    let lookups = core.track_lookups().unwrap();
+    assert!(lookups.genres.windows(2).all(|w| w[0].to_lowercase() <= w[1].to_lowercase()));
+
+    assert_eq!(core.waveform(track_id(1), rbl_ffi::WaveformKind::Bands).unwrap(), bands);
+    assert_eq!(core.waveform(track_id(1), rbl_ffi::WaveformKind::Mono).unwrap(), vec![7; 400]);
+    assert!(core.waveform(track_id(1), rbl_ffi::WaveformKind::Colour).unwrap().is_empty());
+    assert!(core.waveform(track_id(0), rbl_ffi::WaveformKind::Bands).unwrap().is_empty());
+
+    assert_eq!(core.artwork(track_id(2)).unwrap(), b"\xFF\xD8x");
+    assert!(core.artwork(track_id(0)).is_none());
+    assert!(core.artwork(track_id(3)).is_none());
 }

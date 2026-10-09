@@ -11,7 +11,7 @@ use crate::events::LibraryEvent;
 use crate::types::{
     BpmFilter, CountedBpm, CountedKey, Device, DeviceExport, EditHistory, ExplorerChildren, ExplorerRoot, FilterValues,
     TagCategory, TrackFilter, ExtraColumn, ExtraFields, HotCue, LibraryProblem, LibrarySummary, LoadOutcome, NodeKind, Row, SearchField, SortKey,
-    TrackSource, TreeNode, ViewHandle, ViewSpec,
+    TrackSource, TreeNode, ViewHandle, ViewSpec, TrackDetails, TrackLookups, MyTag, MyTagCategory,
 };
 
 impl SortKey {
@@ -340,6 +340,65 @@ impl From<CoreOutcome> for LoadOutcome {
         match outcome {
             CoreOutcome::Ready => Self::Ready,
             CoreOutcome::Problem => Self::Problem,
+        }
+    }
+}
+
+impl From<rbl_app::dto::TrackDetailsDto> for TrackDetails {
+    fn from(d: rbl_app::dto::TrackDetailsDto) -> Self {
+        Self {
+            id: d.id,
+            title: d.title,
+            artist: d.artist,
+            album: d.album,
+            album_artist: d.album_artist,
+            original_artist: d.original_artist,
+            composer: d.composer,
+            remixer: d.remixer,
+            lyricist: d.lyricist,
+            genre: d.genre,
+            label: d.label,
+            key: d.key,
+            comment: d.comment,
+            mix_name: d.mix_name,
+            message: d.message,
+            color: d.color,
+            rating: d.rating,
+            bpm_x100: d.bpm_x100,
+            duration_sec: d.duration_sec,
+            year: d.year,
+            track_number: d.track_number,
+            disc_number: d.disc_number,
+            play_count: d.play_count,
+            file_type: d.file_type,
+            file_size: d.file_size,
+            bitrate: d.bitrate,
+            sample_rate: d.sample_rate,
+            bit_depth: d.bit_depth,
+            date_created: d.date_created,
+            release_date: d.release_date,
+            path: d.path,
+            hot_cue_auto_load: d.hot_cue_auto_load,
+            publish: d.publish,
+            has_artwork: d.has_artwork,
+            my_tags: d.my_tags,
+        }
+    }
+}
+
+impl From<rbl_app::dto::TrackLookupsDto> for TrackLookups {
+    fn from(l: rbl_app::dto::TrackLookupsDto) -> Self {
+        Self {
+            keys: l.keys,
+            genres: l.genres,
+            my_tag_categories: l
+                .my_tag_categories
+                .into_iter()
+                .map(|c| MyTagCategory {
+                    name: c.name,
+                    tags: c.tags.into_iter().map(|t| MyTag { id: t.id, name: t.name }).collect(),
+                })
+                .collect(),
         }
     }
 }

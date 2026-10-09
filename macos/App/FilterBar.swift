@@ -10,6 +10,17 @@ struct FilterBar: View {
     private var values: FilterValues? { model.filterValues }
 
     var body: some View {
+        // Scrolls sideways rather than demanding its full width, or a narrow detail column (the
+        // info panel open beside it) would push the window's minimum size round in a loop.
+        ScrollView(.horizontal) { content }
+            .scrollIndicators(.automatic)
+            .frame(height: 150)
+            .background(.bar)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Track Filter")
+    }
+
+    private var content: some View {
         HStack(alignment: .top, spacing: 10) {
             bpmColumn
             Divider()
@@ -25,10 +36,6 @@ struct FilterBar: View {
                 .help("Clear every column")
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
-        .frame(height: 150)
-        .background(.bar)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Track Filter")
     }
 
     // MARK: Columns
@@ -41,10 +48,10 @@ struct FilterBar: View {
                 width: 96, onPick: { model.filterState.bpm.pick($0, toggle: $1) })
             let applies = model.filterState.toleranceApplies(masterBPMx100: nil)
             PickColumn(
-                title: "\u{00B1}%", enabled: $model.filterState.bpm.enabled,
+                title: "TOLERANCE", enabled: $model.filterState.bpm.enabled,
                 picked: [model.filterState.tolerancePct], showsAll: false,
                 options: FilterState.tolerances.map { FilterOption(value: $0, label: "\u{00B1} \($0)%", count: nil) },
-                width: 76, dimmed: !applies, showsTick: false,
+                width: 84, dimmed: !applies, showsTick: false,
                 onPick: { value, _ in model.filterState.tolerancePct = value ?? 0 })
         }
     }
@@ -123,6 +130,7 @@ struct PickColumn<Value: Hashable & Sendable>: View {
                     Toggle(title, isOn: $enabled).toggleStyle(.checkbox).labelsHidden().controlSize(.small)
                 }
                 Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    .lineLimit(1).fixedSize(horizontal: true, vertical: false)
             }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {

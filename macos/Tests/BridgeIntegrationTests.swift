@@ -83,4 +83,25 @@ struct BridgeIntegrationTests {
         #expect(count == 5)
         #expect(try String(contentsOf: out, encoding: .utf8).hasPrefix("#EXTM3U"))
     }
+
+    @Test func detailsLookupsAndMediaCrossTheBridge() async throws {
+        let dir = fixtureDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let backend = Backend(fixtureDir: dir)
+        #expect(await backend.loadLibrary() == .ready)
+
+        let details = try await backend.trackDetails(id: "10002")
+        #expect(details.title == "Track 002")
+        #expect(!details.hasArtwork)
+        await #expect(throws: FfiError.self) { _ = try await backend.trackDetails(id: "1") }
+
+        let lookups = try await backend.trackLookups()
+        #expect(lookups.genres == lookups.genres.sorted { $0.lowercased() < $1.lowercased() })
+
+        // The fixture has no analysis files and no artwork: empty, not an error.
+        for kind in [WaveformKind.bands, .mono, .colour] {
+            #expect(try await backend.waveform(id: "10002", kind: kind).isEmpty)
+        }
+        #expect(await backend.artwork(id: "10002") == nil)
+    }
 }
