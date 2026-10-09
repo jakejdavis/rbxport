@@ -8,14 +8,14 @@ use std::time::Instant;
 use rbl_app::dto::LibraryProblemDto;
 use rbl_app::error::run_command;
 use rbl_app::state::AppState;
-use rbl_app::{browse, details, edits, explorer, import, maintenance, media, startup, track_data, track_edits, AppError, AppEvent, AppResult, EventSink};
+use rbl_app::{analysis, browse, cues, details, edits, explorer, grid, import, maintenance, media, startup, track_data, track_edits, AppError, AppEvent, AppResult, EventSink};
 use rbl_db::{Library as Db, LibraryLocation, OpenMode};
 
 use crate::error::FfiError;
 use crate::events::{EventListener, ListenerSink};
 use crate::playback::{Playback, PlaybackListener};
 use crate::types::{
-    Beat, Cue, Phrase, EditHistory, SmartRule, TrackField, ImportReport, XmlImportReport, MissingTracks, Duplicates, RelocateReport, Device, ExplorerChildren, ExplorerRoot, ExtraColumn, FilterValues, LibraryProblem, PlaylistFileFormat, LibrarySummary, LoadOutcome, Row, TrackDetails, TrackLookups, TreeNode, ViewHandle, ViewSpec, WaveformKind,
+    AnalysisResult, AnalysisSettings, Beat, Cue, CueSlot, GridEdit, GridState, Phrase, EditHistory, SmartRule, TrackField, ImportReport, XmlImportReport, MissingTracks, Duplicates, RelocateReport, Device, ExplorerChildren, ExplorerRoot, ExtraColumn, FilterValues, LibraryProblem, PlaylistFileFormat, LibrarySummary, LoadOutcome, Row, TrackDetails, TrackLookups, TreeNode, ViewHandle, ViewSpec, WaveformKind,
 };
 
 /// Where `load_library` gets the library from.
@@ -29,6 +29,8 @@ enum Source {
 #[derive(uniffi::Object)]
 pub struct Core {
     state: Arc<AppState>,
+    /// Grid histories and analysis backups, beside the library backups.
+    editor: Arc<grid::GridEditor>,
     sink: ListenerSink,
     source: Source,
 }
@@ -38,6 +40,13 @@ fn ffi<T>(name: &str, f: impl FnOnce() -> AppResult<T>) -> Result<T, FfiError> {
 }
 
 impl Core {
+    fn grid_action(&self, track_id: &str, action: grid::GridAction, options: &grid::GridOptions) -> Result<GridState, FfiError> {
+        ffi("grid_edit", || {
+            grid::run(&self.state, &self.editor, &self.sink, track_id, action, options)
+        })
+        .map(|outcome| outcome.state.into())
+    }
+
     fn load_fixture(&self, dir: &Path) -> AppResult<()> {
         let started = Instant::now();
         let internal = |what: &str, e: &dyn std::fmt::Display| AppError::internal(format!("{what}: {e}"));
@@ -72,8 +81,10 @@ impl Core {
     pub fn new(listener: Arc<dyn EventListener>, cache_dir: Option<String>) -> Arc<Self> {
         let state = Arc::new(AppState::new());
         state.enable_native_gate();
+        let editor = Arc::new(grid::GridEditor::new());
         Arc::new(Self {
             state,
+            editor,
             sink: ListenerSink(listener),
             source: Source::Installed { cache_dir: cache_dir.map(PathBuf::from) },
         })
@@ -85,8 +96,10 @@ impl Core {
         let dir = PathBuf::from(dir);
         let state = Arc::new(AppState::with_backups(dir.join("backups")));
         state.enable_native_gate();
+        let editor = Arc::new(grid::GridEditor::at(&dir));
         Arc::new(Self {
             state,
+            editor,
             sink: ListenerSink(listener),
             source: Source::Fixture { dir },
         })
@@ -415,5 +428,79 @@ impl Core {
     /// Points every missing track at a same-named file under the folders. Blocking.
     pub fn auto_relocate(&self, folders: Vec<String>) -> Result<RelocateReport, FfiError> {
         ffi("auto_relocate", || maintenance::auto_relocate(&self.state, &self.sink, &folders)).map(Into::into)
+    }
+
+    // ---- Phase 4c: cues, beat grid, analysis, play history. All behind the write gate.
+
+    /// Adds a cue at a position; returns its id.
+    pub fn add_cue(&self, track_id: String, slot: CueSlot, position_ms: u32) -> Result<String, FfiError> {
+        ffi("add_cue", || cues::add_cue(&self.state, &self.sink, &track_id, slot.into(), position_ms))
+    }
+
+    /// Adds a loop (a cue with an out point); `beats` is 0 when unknown.
+    pub fn add_loop(&self, track_id: String, slot: CueSlot, in_ms: u32, out_ms: u32, beats: u16) -> Result<String, FfiError> {
+        ffi("add_loop", || cues::add_loop(&self.state, &self.sink, &track_id, slot.into(), in_ms, out_ms, beats))
+    }
+
+    pub fn move_cue(&self, cue_id: String, position_ms: u32) -> Result<(), FfiError> {
+        ffi("move_cue", || cues::move_cue(&self.state, &self.sink, &cue_id, position_ms))
+    }
+
+    /// A hot cue takes a colour-table index; a memory cue its named index 0 to 7; `None` resets.
+    pub fn set_cue_colour(&self, cue_id: String, colour: Option<u8>) -> Result<(), FfiError> {
+        ffi("set_cue_colour", || cues::set_cue_colour(&self.state, &self.sink, &cue_id, colour))
+    }
+
+    pub fn delete_cue(&self, cue_id: String) -> Result<(), FfiError> {
+        ffi("delete_cue", || cues::delete_cue(&self.state, &self.sink, &cue_id))
+    }
+
+    /// Memory cues become hot cues in the free slots; returns how many.
+    pub fn convert_memory_cues_to_hot(&self, track_id: String) -> Result<u32, FfiError> {
+        ffi("convert_memory_cues_to_hot", || cues::convert_memory_cues_to_hot(&self.state, &self.sink, &track_id))
+    }
+
+    /// The track's grid tempo, beat count, session undo state and lock.
+    pub fn grid_state(&self, track_id: String) -> Result<GridState, FfiError> {
+        ffi("grid_state", || grid::grid_state(&self.state, &self.editor, &track_id)).map(Into::into)
+    }
+
+    /// One grid edit; `from_ms` limits it to the beats from there on. Blocking.
+    pub fn grid_edit(&self, track_id: String, edit: GridEdit, from_ms: Option<u32>, transaction: Option<String>) -> Result<GridState, FfiError> {
+        let options = grid::GridOptions { transaction, ..grid::GridOptions::default() };
+        self.grid_action(&track_id, grid::GridAction::Edit { edit: edit.into(), from_ms }, &options)
+    }
+
+    pub fn grid_undo(&self, track_id: String) -> Result<GridState, FfiError> {
+        self.grid_action(&track_id, grid::GridAction::Undo, &grid::GridOptions::default())
+    }
+
+    pub fn grid_redo(&self, track_id: String) -> Result<GridState, FfiError> {
+        self.grid_action(&track_id, grid::GridAction::Redo, &grid::GridOptions::default())
+    }
+
+    /// Analysis lock on or off (a library write).
+    pub fn grid_lock(&self, track_id: String, on: bool) -> Result<GridState, FfiError> {
+        ffi("grid_lock", || grid::lock(&self.state, &self.editor, &self.sink, &track_id, on)).map(Into::into)
+    }
+
+    /// Analyses one track and keeps the result. Blocking (seconds): call off the main thread.
+    /// `rekordbox_mode` selects the rekordbox preset instead of rbxport's.
+    pub fn analyse_track(&self, track_id: String, settings: AnalysisSettings, rekordbox_mode: bool) -> Result<AnalysisResult, FfiError> {
+        let mode = if rekordbox_mode { "rekordbox" } else { "rbxport" };
+        ffi("analyse_track", || {
+            analysis::analyse_track(&self.state, &self.editor, &self.sink, &track_id, Some(mode), &settings.into())
+        })
+        .map(Into::into)
+    }
+
+    /// Re-reads the whole library once, after a run of analyses. Returns the generation.
+    pub fn reload_library(&self) -> Result<u32, FfiError> {
+        ffi("reload_library", || edits::reload(&self.state, &self.sink))
+    }
+
+    /// Records a play: today's history session and the play count. Returns the generation.
+    pub fn record_play(&self, track_id: String) -> Result<u32, FfiError> {
+        ffi("record_play", || track_edits::record_play(&self.state, &self.sink, &track_id))
     }
 }

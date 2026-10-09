@@ -219,6 +219,52 @@ final class PlayerModel {
 
     func dismissNotice() { notice = nil }
 
+    // MARK: Writes
+
+    /// Wires the decks to the app's write gate and status line. A write that fails reports its
+    /// reason (the core's, verbatim); an empty message clears it.
+    func configureWrites(canWrite: @escaping () -> Bool) {
+        for deck in decks {
+            deck.canWrite = canWrite
+            deck.report = { [weak self] message in
+                if !message.isEmpty { self?.notice = message }
+            }
+        }
+    }
+
+    /// The deck menu's waveform colour; the app owns the preference.
+    @ObservationIgnored var setWaveformPalette: ((WaveformPalette) -> Void)?
+    /// Analyze Track from the deck menu; the app owns the queue.
+    @ObservationIgnored var analyseTracks: (([String]) -> Void)?
+
+    func chooseWaveformPalette(_ palette: WaveformPalette) { setWaveformPalette?(palette) }
+
+    func analyse(deck which: Deck) {
+        if let id = deck(which).track?.id { analyseTracks?([id]) }
+    }
+
+    /// A track finished analysing: the decks showing it take its new tempo (the analysis may
+    /// disagree with the tag the track was loaded with) and draw the new waveforms and grid.
+    func handle(analysed result: AnalysisResult) {
+        for deck in decks where deck.track?.id == result.trackId {
+            deck.reloadAnalysis(bpmX100: result.bpmX100, durationSec: result.durationSec)
+        }
+    }
+
+    /// A library event that concerns what the decks show.
+    func handle(libraryEvent event: LibraryEvent) {
+        switch event {
+        case .cuesChanged(let id):
+            for deck in decks where deck.track?.id == id { deck.refreshCues() }
+        case .gridChanged(let id):
+            for deck in decks where deck.track?.id == id { deck.refreshGrid() }
+        case .analysisChanged(let id):
+            for deck in decks where deck.track?.id == id { deck.reloadAnalysis() }
+        default:
+            break
+        }
+    }
+
     // MARK: Loading
 
     /// Loads a track onto a deck. `row` is the table row it came from (it carries everything the
@@ -274,6 +320,11 @@ final class PlayerModel {
         case .memoryPrevious: d.callPreviousMemory()
         case .memoryNext: d.callNextMemory()
         case .memoryNumber(let n): d.callMemory(number: n)
+        case .memoryStore: d.storeMemoryCue()
+        case .memoryDelete: d.deleteMemoryAtHead()
+        case .hotCueClear(let letter): d.clearHotCue(letter)
+        case .gridShift(let direction): d.grid.shift(direction)
+        case .gridAlign: d.grid.alignToPlayhead()
         case .hotCueDown(let letter):
             padDeck = which
             d.padPressed(letter)

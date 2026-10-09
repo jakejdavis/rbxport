@@ -234,7 +234,7 @@ pub fn native_write_error(error: rbl_db::DbError) -> AppError {
     }
 }
 
-fn map_error(state: &AppState, error: rbl_db::DbError) -> AppError {
+pub(crate) fn map_error(state: &AppState, error: rbl_db::DbError) -> AppError {
     if state.native_gate_enabled() { native_write_error(error) } else { write_error(error) }
 }
 

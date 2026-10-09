@@ -63,6 +63,9 @@ struct RbxportApp: App {
                     Button("rekordbox XML\u{2026}") { Task { await model.importXMLFromPanel() } }
                 }
                 .disabled(!model.canEdit)
+                Button("Analyze Track(s)") { model.analyseSelection() }
+                    .keyboardShortcut("a", modifiers: [.command, .shift])
+                    .disabled(!model.canEdit || model.selectedIDs.isEmpty)
                 Button("Missing File Manager\u{2026}") { model.openMissingFiles() }
                 Button("Find Duplicates\u{2026}") { model.openDuplicates() }
             }

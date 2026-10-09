@@ -347,7 +347,7 @@ struct DetailWaveform: NSViewRepresentable {
     func updateNSView(_ view: DetailWaveformNSView, context: Context) {
         // Reading these here is what makes SwiftUI call this again when they change.
         _ = (deck.anchor, deck.zoomBars, deck.beatsVersion, deck.cues, deck.loop, deck.detailBytes?.count)
-        _ = (deck.isPlaying, deck.scrubbing, deck.pendingLoopIn, deck.phase, deck.track?.id)
+        _ = (deck.isPlaying, deck.scrubbing, deck.pendingLoopIn, deck.phase, deck.track?.id, deck.analysisVersion)
         view.configure(deck: deck, palette: palette)
     }
 }

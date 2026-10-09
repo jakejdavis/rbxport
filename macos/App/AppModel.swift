@@ -131,6 +131,10 @@ final class AppModel {
     let waveforms: WaveformService
     /// The decks and the preview player.
     let player: PlayerModel
+    /// Tracks waiting to be analysed, and how far the run has got.
+    let analysis: AnalysisQueue
+    /// Tracks analysed in the current run, for the decks to redraw once the library is re-read.
+    @ObservationIgnored var analysedResults: [AnalysisResult] = []
 
     /// How tall rows are when the Artwork or Preview column is shown. Persisted.
     var rowSize: RowSize {
@@ -204,11 +208,28 @@ final class AppModel {
         rowSize = defaults.string(forKey: "rowSize").flatMap(RowSize.init) ?? .standard
         waveformPalette = defaults.string(forKey: "waveformPalette").flatMap(WaveformPalette.init) ?? .bands
         player = PlayerModel(backend: backend, waveforms: waveforms, artwork: artwork, defaults: defaults)
+        analysis = AnalysisQueue(backend: backend, defaults: defaults)
         info.setActive(infoPanelOpen)
         info.onEdit = { [weak self] edit, id in await self?.applyInfoEdit(edit, to: id) ?? false }
         onLoadToDeck = { [weak self] id, deck in
             guard let self else { return }
             self.player.load(trackID: id, row: self.loadedRow(id: id), into: deck)
+        }
+        player.configureWrites { [weak self] in self?.canEdit ?? false }
+        player.setWaveformPalette = { [weak self] palette in self?.waveformPalette = palette }
+        player.analyseTracks = { [weak self] ids in self?.analyse(ids) }
+        analysis.onAnalysed = { [weak self] result in self?.analysedResults.append(result) }
+        analysis.onDrained = { [weak self] in
+            guard let self else { return }
+            // One reload for the whole run, not one per track. The index learns where the new
+            // analysis files are only now, so the decks read them after it, not at each event.
+            let results = self.analysedResults
+            self.analysedResults = []
+            Task {
+                _ = try? await self.backend.reloadLibrary()
+                self.waveforms.removeAll()
+                for result in results { self.player.handle(analysed: result) }
+            }
         }
         player.loadSelected = { [weak self] in
             guard let self, self.selectedIDs.count == 1, let id = self.selectedIDs.first else { return }
@@ -267,7 +288,9 @@ final class AppModel {
             await tagListChanged()
         case .importProgress(let progress):
             importProgressed(progress)
-        case .cuesChanged, .gridChanged, .analysisChanged, .devicesChanged:
+        case .cuesChanged, .gridChanged, .analysisChanged:
+            await handleEditEvent(event)
+        case .devicesChanged:
             break
         }
     }
@@ -583,6 +606,13 @@ final class AppModel {
         case .removeFromCollection: Task { await removeSelectionFromCollection() }
         case .removeFromHistory: Task { await removeSelectionFromHistory() }
         case .importToCollection: Task { await importSelectionToCollection() }
+        case .analyse: analyseSelection()
+        case .analysisLock(let on):
+            let ids = orderedSelection
+            Task { await setAnalysisLock(on, ids: ids) }
+        case .convertMemoryToHot:
+            let ids = orderedSelection
+            Task { await convertMemoryCuesToHot(ids: ids) }
         case .setColor(let color):
             let ids = orderedSelection
             Task { await setColor(color, ids: ids) }

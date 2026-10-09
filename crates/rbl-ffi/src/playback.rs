@@ -374,6 +374,19 @@ impl Playback {
         })
     }
 
+    /// Re-reads the loaded track's grid into the deck's metronome, after a grid edit
+    /// or a re-analysis. A no-op when nothing is loaded or the device is not open.
+    pub fn refresh_metronome_grid(&self, deck: Deck) {
+        let which = rbl_deck::Deck::from(deck);
+        let Some(track_id) = self.player.loaded_tracks.lock().get(&which).cloned() else { return };
+        let Some(engine) = self.player.opened() else { return };
+        let grid = track_data::track_beats(&self.state, &track_id).unwrap_or_default();
+        if self.player.loaded_tracks.lock().get(&which) == Some(&track_id) {
+            let beats: Vec<(u32, bool)> = grid.iter().map(|b| (b.time_ms, b.number == 1)).collect();
+            engine.set_metronome_grid(which, &beats);
+        }
+    }
+
     pub fn unload(&self, deck: Deck) {
         let which = rbl_deck::Deck::from(deck);
         self.player.loaded_tracks.lock().remove(&which);

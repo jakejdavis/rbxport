@@ -88,6 +88,7 @@ struct DeckPanel: View {
                 if !track.key.isEmpty { KeyShiftView(deck: deck) }
                 BpmReadout(deck: deck, track: track)
             }
+            DeckMenu(deck: deck, player: player, palette: palette)
         }
         .frame(height: 40)
     }
@@ -130,6 +131,7 @@ struct DeckPanel: View {
                     LoopControls(deck: deck)
                     JumpControls(deck: deck)
                     ModeChips(deck: deck)
+                    GridControls(deck: deck)
                     Spacer(minLength: 0)
                 }
                 .frame(height: 26)
@@ -146,6 +148,7 @@ struct DeckPanel: View {
                 HStack(spacing: 16) {
                     MemoryCueButtons(deck: deck)
                     ModeChips(deck: deck)
+                    GridControls(deck: deck)
                     Spacer(minLength: 0)
                 }
                 .frame(height: 26)
@@ -429,6 +432,7 @@ struct OverviewWaveform: View {
             .gesture(
                 DragGesture(minimumDistance: 0).onChanged { value in
                     guard deck.isLoaded, size.width > 0 else { return }
+                    guard deck.waveformClick else { return }
                     deck.seek(toFraction: value.location.x / size.width)
                 })
             .onChange(of: request(size), initial: true) { _, wanted in
@@ -448,12 +452,13 @@ struct OverviewWaveform: View {
         var width: Int
         var height: Int
         var trackID: String?
+        var analysisVersion: Int
     }
 
     private func request(_ size: CGSize) -> Request {
         Request(
             palette: palette, width: Int((size.width * scale).rounded()),
-            height: Int((max(size.height - 6, 0) * scale).rounded()), trackID: deck.track?.id)
+            height: Int((max(size.height - 6, 0) * scale).rounded()), trackID: deck.track?.id, analysisVersion: deck.analysisVersion)
     }
 }
 

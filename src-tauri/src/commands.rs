@@ -2345,7 +2345,8 @@ pub async fn record_play<R: tauri::Runtime>(
     state: State<'_, Arc<AppState>>,
     track: String,
 ) -> AppResult<u32> {
-    edit(app, state, "record_play", Touched::Histories(vec![track.clone()]), move |w| w.record_play(&track).map(|_| ())).await
+    let state = Arc::clone(&state);
+    blocking("record_play", move || rbl_app::track_edits::record_play(&state, &RtSink(app), &track)).await
 }
 
 /// Remove from History: the tracks' plays leave the session.

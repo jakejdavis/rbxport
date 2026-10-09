@@ -46,6 +46,8 @@ protocol PlaybackEngine: Sendable {
     func scrubEnd(deck: Deck)
     /// A click on every beat of the deck's grid while it plays.
     func setMetronome(deck: Deck, on: Bool)
+    /// Re-reads the loaded track's grid into the metronome, after a grid edit or a re-analysis.
+    func refreshMetronomeGrid(deck: Deck)
     /// Which click (1 to 3) both decks' metronomes make.
     func setMetronomeSound(_ sound: UInt8)
     /// Both decks now, for starting up and for after a reset.
@@ -155,6 +157,7 @@ final class RustPlayback: PlaybackEngine, @unchecked Sendable {
     func scrubTo(deck: Deck, ms: Double) { transport.async { [playback] in playback.scrubTo(deck: deck, positionMs: ms) } }
     func scrubEnd(deck: Deck) { transport.async { [playback] in playback.scrubEnd(deck: deck) } }
     func setMetronome(deck: Deck, on: Bool) { transport.async { [playback] in playback.setMetronome(deck: deck, on: on) } }
+    func refreshMetronomeGrid(deck: Deck) { transport.async { [playback] in playback.refreshMetronomeGrid(deck: deck) } }
 
     func setMetronomeSound(_ sound: UInt8) {
         transport.async { [playback] in playback.setMetronomeSound(sound: sound, volume: .large) }
