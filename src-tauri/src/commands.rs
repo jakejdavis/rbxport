@@ -7,7 +7,6 @@
 
 use std::sync::Arc;
 
-use rbl_deck::{Band, Curve};
 use tauri::State;
 use tauri_plugin_opener::OpenerExt;
 
@@ -1382,8 +1381,8 @@ pub async fn deck_key_shift<R: tauri::Runtime>(
     deck: String,
     semitones: i8,
 ) -> AppResult<()> {
-    let engine = player.engine(&app)?;
-    engine.set_key_shift(crate::player::deck_of(&deck), semitones);
+    let _ = &app;
+    player.set_key_shift(crate::player::deck_of(&deck), semitones);
     Ok(())
 }
 
@@ -1574,7 +1573,9 @@ pub async fn set_master_level<R: tauri::Runtime>(
     player: State<'_, Arc<crate::player::Player>>,
     level: f32,
 ) -> AppResult<()> {
-    player.engine(&app)?;
+    // Remembered, and applied when the engine opens: setting a level is not a
+    // reason to open the audio device.
+    let _ = &app;
     player.set_master_level(level);
     Ok(())
 }
@@ -1592,10 +1593,8 @@ pub async fn set_channel_band<R: tauri::Runtime>(
     band: String,
     position: f32,
 ) -> AppResult<()> {
-    let engine = player.engine(&app)?;
-    if let Some(channel) = engine.mixer().channels.get(channel_of(&deck)) {
-        channel.set_band(band_of(&band), position);
-    }
+    let _ = &app;
+    player.set_channel_band(crate::player::deck_of(&deck), band_of(&band), position);
     Ok(())
 }
 
@@ -1607,10 +1606,8 @@ pub async fn set_channel_kill<R: tauri::Runtime>(
     band: String,
     killed: bool,
 ) -> AppResult<()> {
-    let engine = player.engine(&app)?;
-    if let Some(channel) = engine.mixer().channels.get(channel_of(&deck)) {
-        channel.set_kill(band_of(&band), killed);
-    }
+    let _ = &app;
+    player.set_channel_kill(crate::player::deck_of(&deck), band_of(&band), killed);
     Ok(())
 }
 
@@ -1622,10 +1619,8 @@ pub async fn set_channel_trim<R: tauri::Runtime>(
     deck: String,
     trim: f32,
 ) -> AppResult<()> {
-    let engine = player.engine(&app)?;
-    if let Some(channel) = engine.mixer().channels.get(channel_of(&deck)) {
-        channel.set_trim(trim);
-    }
+    let _ = &app;
+    player.set_channel_trim(crate::player::deck_of(&deck), trim);
     Ok(())
 }
 
@@ -1636,8 +1631,8 @@ pub async fn set_crossfade<R: tauri::Runtime>(
     player: State<'_, Arc<crate::player::Player>>,
     position: f32,
 ) -> AppResult<()> {
-    let engine = player.engine(&app)?;
-    engine.mixer().set_crossfade(position);
+    let _ = &app;
+    player.set_crossfade(position);
     Ok(())
 }
 
@@ -1648,24 +1643,12 @@ pub async fn set_eq_curve<R: tauri::Runtime>(
     player: State<'_, Arc<crate::player::Player>>,
     isolator: bool,
 ) -> AppResult<()> {
-    let engine = player.engine(&app)?;
-    engine.mixer().set_curve(if isolator { Curve::Isolator } else { Curve::Eq });
+    let _ = &app;
+    player.set_eq_curve(isolator);
     Ok(())
 }
 
-/// Which strip a deck name means. Anything but "b" is deck A, as everywhere.
-fn channel_of(deck: &str) -> usize {
-    usize::from(matches!(deck, "b" | "B"))
-}
-
-/// Which band a name means, defaulting to the one a typo cannot silence.
-fn band_of(name: &str) -> Band {
-    match name {
-        "low" => Band::Low,
-        "mid" => Band::Mid,
-        _ => Band::High,
-    }
-}
+use crate::player::band_of;
 
 /// How fast a deck plays, as a multiple of the file's own speed.
 ///
@@ -1678,8 +1661,8 @@ pub async fn deck_tempo<R: tauri::Runtime>(
     deck: String,
     tempo: f32,
 ) -> AppResult<()> {
-    let engine = player.engine(&app)?;
-    engine.set_tempo(crate::player::deck_of(&deck), tempo);
+    let _ = &app;
+    player.set_tempo(crate::player::deck_of(&deck), tempo);
     Ok(())
 }
 
@@ -1691,8 +1674,8 @@ pub async fn deck_master_tempo<R: tauri::Runtime>(
     deck: String,
     on: bool,
 ) -> AppResult<()> {
-    let engine = player.engine(&app)?;
-    engine.set_master_tempo(crate::player::deck_of(&deck), on);
+    let _ = &app;
+    player.set_master_tempo(crate::player::deck_of(&deck), on);
     Ok(())
 }
 

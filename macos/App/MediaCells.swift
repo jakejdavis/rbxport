@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 
 /// Geometry and drawing for the Preview column, kept apart from the view so tests can check it.
 enum PreviewLayout {
@@ -29,6 +30,24 @@ enum PreviewLayout {
         return (band.minX + CGFloat(Double(positionMs) / durationMs) * band.width).rounded()
     }
 
+    /// The time a click at `point` (in the cell's unflipped coordinates) asks to preview, clamped
+    /// to the strip. A click on a hot cue's badge, in the strip's top rows, means that cue's own
+    /// time instead; where badges overlap the last drawn wins. Nil when the track has no length.
+    static func clickPositionMs(
+        at point: CGPoint, band: CGRect, durationMs: Double, hotCues: [HotCue], rowHeight: CGFloat
+    ) -> Double? {
+        guard durationMs > 0, band.width > 0 else { return nil }
+        let size = badgeSize(rowHeight: rowHeight)
+        if point.y >= band.maxY - size {
+            for cue in hotCues.reversed() {
+                let x = badgeX(positionMs: cue.positionMs, durationMs: durationMs, band: band, size: size)
+                if point.x >= x && point.x < x + size { return Double(cue.positionMs) }
+            }
+        }
+        let fraction = min(max((point.x - band.minX) / band.width, 0), 1)
+        return Double(fraction) * durationMs
+    }
+
     static let hotCueDefault = NSColor(srgbRed: 0x3C / 255, green: 0xEB / 255, blue: 0x50 / 255, alpha: 1)
     static let memoryCue = NSColor(srgbRed: 0xEA / 255, green: 0x33 / 255, blue: 0x23 / 255, alpha: 1)
     static let well = NSColor(white: 0.04, alpha: 1)
@@ -42,7 +61,7 @@ enum PreviewLayout {
 /// The Preview column: a row's waveform on a dark well, with hot cue badges and memory cue
 /// markers drawn over it at paint time (so cue edits never leave a stale cached bitmap).
 /// The waveform is fetched once the row has stayed on screen briefly, and cancelled if the
-/// row scrolls away first. Click-to-preview comes with the player.
+/// row scrolls away first. A plain click plays the track from that point (the preview player).
 final class PreviewCellView: NSTableCellView {
     private var row: Row?
     private var image: CGImage?
@@ -51,10 +70,15 @@ final class PreviewCellView: NSTableCellView {
     private var ticket: WaveformService.Ticket?
     private var requestedStyle: WaveformService.Style?
     private var requestedID: String?
+    private var preview: PreviewModel?
+    private var link: CADisplayLink?
+    /// A plain click on the waveform: the row and the time asked for, in milliseconds.
+    var onPreviewClick: ((Row, Double) -> Void)?
 
     override var isFlipped: Bool { false }
 
-    func show(row: Row?, palette: WaveformPalette, service: WaveformService) {
+    func show(row: Row?, palette: WaveformPalette, service: WaveformService, preview: PreviewModel? = nil) {
+        self.preview = preview
         if self.row?.id != row?.id || self.palette != palette {
             cancelLoad()
             image = nil
@@ -66,6 +90,7 @@ final class PreviewCellView: NSTableCellView {
         self.service = service
         needsDisplay = true
         requestIfNeeded()
+        refreshPlayhead()
     }
 
     func cancelLoad() {
@@ -78,9 +103,69 @@ final class PreviewCellView: NSTableCellView {
     override func prepareForReuse() {
         super.prepareForReuse()
         cancelLoad()
+        stopLink()
         row = nil
         image = nil
     }
+
+    // MARK: Click-to-preview
+
+    override func mouseDown(with event: NSEvent) {
+        let flags = event.modifierFlags.intersection([.shift, .command, .control])
+        if event.clickCount == 1, flags.isEmpty, let row, row.analysed != 0 {
+            let point = convert(event.locationInWindow, from: nil)
+            if let ms = PreviewLayout.clickPositionMs(
+                at: point, band: PreviewLayout.band(in: bounds), durationMs: Double(row.durationSec) * 1000,
+                hotCues: row.hotCues, rowHeight: bounds.height)
+            {
+                onPreviewClick?(row, ms)
+            }
+        }
+        // The table still selects the row and sees double-clicks.
+        super.mouseDown(with: event)
+    }
+
+    // MARK: Playhead
+
+    /// Whether this row is the one previewing, and so draws a playhead.
+    private var previewing: Bool {
+        guard let row, let preview else { return false }
+        return preview.isPlaying && preview.trackID == row.id
+    }
+
+    /// Starts or stops the per-frame redraw to match whether this row is previewing.
+    func refreshPlayhead() {
+        if previewing {
+            if link == nil, window != nil {
+                let link = displayLink(target: self, selector: #selector(frame(_:)))
+                link.add(to: .main, forMode: .common)
+                self.link = link
+            }
+        } else {
+            stopLink()
+        }
+        needsDisplay = true
+    }
+
+    @objc private func frame(_ link: CADisplayLink) {
+        guard previewing else {
+            stopLink()
+            needsDisplay = true
+            return
+        }
+        needsDisplay = true
+    }
+
+    private func stopLink() {
+        link?.invalidate()
+        link = nil
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil { stopLink() } else { refreshPlayhead() }
+    }
+
 
     override func layout() {
         super.layout()
@@ -125,6 +210,16 @@ final class PreviewCellView: NSTableCellView {
         let durationMs = Double(row.durationSec) * 1000
         drawMemoryCues(row.memoryCues, durationMs: durationMs, band: band, in: context)
         drawHotCues(row.hotCues, durationMs: durationMs, band: band, in: context)
+        drawPlayhead(row: row, durationMs: durationMs, band: band, in: context)
+    }
+
+    private func drawPlayhead(row: Row, durationMs: Double, band: CGRect, in context: CGContext) {
+        guard durationMs > 0, let preview, let ms = preview.positionMs(of: row.id, at: CACurrentMediaTime()) else { return }
+        let x = (band.minX + CGFloat(min(ms / durationMs, 1)) * band.width).rounded()
+        context.setFillColor(NSColor.black.withAlphaComponent(0.35).cgColor)
+        context.fill(CGRect(x: band.minX, y: band.minY, width: max(x - band.minX, 0), height: band.height))
+        context.setFillColor(NSColor.white.cgColor)
+        context.fill(CGRect(x: x - 1, y: band.minY - 1, width: 2, height: band.height + 2))
     }
 
     private func drawMemoryCues(_ cues: [UInt32], durationMs: Double, band: CGRect, in context: CGContext) {

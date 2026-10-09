@@ -101,6 +101,8 @@ final class AppModel {
     let info: InfoPanelModel
     let artwork: ArtworkService
     let waveforms: WaveformService
+    /// The decks and the preview player.
+    let player: PlayerModel
 
     /// How tall rows are when the Artwork or Preview column is shown. Persisted.
     var rowSize: RowSize {
@@ -141,7 +143,7 @@ final class AppModel {
     private(set) var selectedIDs: Set<String> = []
     private(set) var selectionAnchor: String?
     private(set) var selectionSummary: SelectionSummary?
-    /// Called for Return or a double-click on a track; the player arrives in a later phase.
+    /// Called for Return or a double-click on a track: loads it onto deck A.
     var onLoadToDeck: (String) -> Void = { _ in }
     private(set) var sortKey: SortKey = .trackNo
     private(set) var descending = false
@@ -171,7 +173,12 @@ final class AppModel {
         infoPanelOpen = defaults.bool(forKey: "infoPanel.open")
         rowSize = defaults.string(forKey: "rowSize").flatMap(RowSize.init) ?? .standard
         waveformPalette = defaults.string(forKey: "waveformPalette").flatMap(WaveformPalette.init) ?? .bands
+        player = PlayerModel(backend: backend, waveforms: waveforms, artwork: artwork, defaults: defaults)
         info.setActive(infoPanelOpen)
+        onLoadToDeck = { [weak self] id in
+            guard let self else { return }
+            self.player.load(trackID: id, row: self.loadedRow(id: id))
+        }
     }
 
     /// Starts listening for library events, then loads the library.
@@ -179,6 +186,7 @@ final class AppModel {
         guard !started else { return }
         started = true
         phase = .loading
+        player.start()
         let backend = backend
         eventTask = Task { [weak self] in
             for await event in backend.events {
@@ -379,7 +387,7 @@ final class AppModel {
     }
 
     /// The row for `id` if its page is loaded.
-    private func loadedRow(id: String) -> Row? {
+    func loadedRow(id: String) -> Row? {
         var found: Row?
         pager.forEachLoadedRow { _, row in if found == nil && row.id == id { found = row } }
         return found
@@ -515,6 +523,8 @@ final class AppModel {
             let ids = Array(selectedIDs)
             Task { await revealInFinder(trackIDs: ids) }
         case .showInformation: showInformation()
+        case .loadToDeck(let deck):
+            if let id = selectedIDs.first, selectedIDs.count == 1 { player.load(trackID: id, row: loadedRow(id: id), into: deck) }
         case .exportPlaylist: break
         }
     }

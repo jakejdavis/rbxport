@@ -3,6 +3,9 @@ import Foundation
 /// An in-memory library for previews and unit tests.
 actor MockBackend: BackendProtocol {
     nonisolated let events: AsyncStream<LibraryEvent>
+    /// The scripted engine behind `playback`; tests drive and inspect it.
+    nonisolated let mockPlayback = MockPlayback()
+    nonisolated var playback: any PlaybackEngine { mockPlayback }
     private let continuation: AsyncStream<LibraryEvent>.Continuation
 
     private var trackCount: Int

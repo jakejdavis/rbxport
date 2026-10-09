@@ -76,6 +76,17 @@ struct TrackTable: NSViewRepresentable {
             self.model = model
             super.init()
             pager.onPageLoaded = { [weak self] range in self?.pagesLoaded(range) }
+            model.player.preview.onChange = { [weak self] in self?.refreshPreviewCells() }
+        }
+
+        /// The previewing row changed: every visible Preview cell redraws its playhead.
+        private func refreshPreviewCells() {
+            guard let table else { return }
+            for row in 0..<table.numberOfRows where table.rowView(atRow: row, makeIfNecessary: false) != nil {
+                for case let cell as PreviewCellView in table.rowView(atRow: row, makeIfNecessary: false)?.subviews ?? [] {
+                    cell.refreshPlayhead()
+                }
+            }
         }
 
         // MARK: Updating from the model
@@ -173,8 +184,27 @@ struct TrackTable: NSViewRepresentable {
                 autoSelected = true
                 table.selectRowIndexes(IndexSet(integer: n), byExtendingSelection: false)
             }
+            // Dev aids: RBXPORT_LOAD_ROW=<n> loads that row onto deck A (RBXPORT_PLAY=1 also plays it);
+            // RBXPORT_PREVIEW_ROW=<n> previews that row from 30%.
+            let env = ProcessInfo.processInfo.environment
+            if !autoLoaded, let text = env["RBXPORT_LOAD_ROW"], let n = Int(text), range.contains(n),
+                let row = pager.peek(at: n)
+            {
+                autoLoaded = true
+                model.loadToDeck(trackID: row.id)
+                if env["RBXPORT_PLAY"] == "1" { model.player.deckA.playWhenLoaded() }
+            }
+            if !autoPreviewed, let text = env["RBXPORT_PREVIEW_ROW"], let n = Int(text), range.contains(n),
+                let row = pager.peek(at: n)
+            {
+                autoPreviewed = true
+                model.player.preview.click(
+                    trackID: row.id, positionMs: Double(row.durationSec) * 300, durationMs: Double(row.durationSec) * 1000)
+            }
         }
         private var autoSelected = false
+        private var autoLoaded = false
+        private var autoPreviewed = false
 
         /// Selects the rows of `range` whose tracks are in the model's selection.
         private func restoreSelection(in range: Range<Int>) {
@@ -230,7 +260,11 @@ struct TrackTable: NSViewRepresentable {
                 return cell
             case .preview:
                 let cell = reusable(tableView, column.identifier) { PreviewCellView() }
-                cell.show(row: data, palette: palette, service: model.waveforms)
+                cell.show(row: data, palette: palette, service: model.waveforms, preview: model.player.preview)
+                cell.onPreviewClick = { [weak model] row, ms in
+                    model?.player.preview.click(
+                        trackID: row.id, positionMs: ms, durationMs: Double(row.durationSec) * 1000)
+                }
                 return cell
             case .artwork:
                 let cell = reusable(tableView, column.identifier) { ArtworkCellView() }

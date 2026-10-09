@@ -32,6 +32,8 @@ protocol BackendProtocol: Sendable {
     func waveform(id: String, kind: WaveformKind) async throws -> Data
     /// The artwork image file, or nil (none, missing, or refused by the core).
     func artwork(id: String) async -> Data?
+    /// The decks and the preview player.
+    var playback: any PlaybackEngine { get }
 }
 
 /// Forwards the Rust core's callbacks into an `AsyncStream`.
@@ -54,6 +56,7 @@ final class EventBridge: EventListener, Sendable {
 /// Owns the UniFFI `Core`. Every call blocks, so none run on the main actor.
 actor Backend: BackendProtocol {
     nonisolated let events: AsyncStream<LibraryEvent>
+    nonisolated let playback: any PlaybackEngine
     private let core: Core
 
     /// The installed rekordbox library, opened read-only. `cacheDir` holds the snapshot cache.
@@ -63,14 +66,24 @@ actor Backend: BackendProtocol {
         if let cacheDir {
             try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
         }
-        core = Core(listener: bridge, cacheDir: cacheDir?.path)
+        let core = Core(listener: bridge, cacheDir: cacheDir?.path)
+        self.core = core
+        playback = Backend.makePlayback(core)
     }
 
     /// A fixture library in `fixtureDir` (built if empty), for tests and previews.
     init(fixtureDir: URL) {
         let bridge = EventBridge()
         events = bridge.stream
-        core = Core.withFixture(listener: bridge, dir: fixtureDir.path)
+        let core = Core.withFixture(listener: bridge, dir: fixtureDir.path)
+        self.core = core
+        playback = Backend.makePlayback(core)
+    }
+
+    /// The playback object. Honours `RBXPORT_NULL_AUDIO=1` (a silent, real-time sink).
+    private static func makePlayback(_ core: Core) -> any PlaybackEngine {
+        let bridge = PlaybackBridge()
+        return RustPlayback(playback: core.playback(listener: bridge), bridge: bridge)
     }
 
     static var defaultCacheDir: URL {

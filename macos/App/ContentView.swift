@@ -35,6 +35,12 @@ struct ContentView: View {
                     }
                     .help("Show the track filter")
                 }
+                ToolbarItem(placement: .navigation) {
+                    Toggle(isOn: Binding(get: { model.player.panelOpen }, set: { model.player.panelOpen = $0 })) {
+                        Label("Player", systemImage: "waveform")
+                    }
+                    .help("Show the player")
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Toggle(isOn: Binding(get: { model.infoPanelOpen }, set: { model.infoPanelOpen = $0 })) {
                         Label("Information", systemImage: "info.circle")
@@ -68,21 +74,28 @@ struct DetailView: View {
 
     var body: some View {
         @Bindable var model = model
-        VStack(spacing: 0) {
-            if model.filterBarOpen {
-                FilterBar(model: model)
+        VSplitView {
+            if model.player.panelOpen {
+                DeckPanel(deck: model.player.deckA, player: model.player, palette: model.waveformPalette)
+                    .frame(minHeight: 150, idealHeight: 188, maxHeight: 320)
+            }
+            VStack(spacing: 0) {
+                if model.filterBarOpen {
+                    FilterBar(model: model)
+                    Divider()
+                }
+                if let opened = model.opened {
+                    TrackTable(
+                        model: model, opened: opened, layout: model.layout, keyStyle: model.keyStyle,
+                        sortKey: model.sortKey, descending: model.descending,
+                        palette: model.waveformPalette, rowHeight: model.rowHeight)
+                } else {
+                    Spacer()
+                }
                 Divider()
+                StatusLine()
             }
-            if let opened = model.opened {
-                TrackTable(
-                    model: model, opened: opened, layout: model.layout, keyStyle: model.keyStyle,
-                    sortKey: model.sortKey, descending: model.descending,
-                    palette: model.waveformPalette, rowHeight: model.rowHeight)
-            } else {
-                Spacer()
-            }
-            Divider()
-            StatusLine()
+            .frame(minHeight: 160)
         }
         .inspector(isPresented: $model.infoPanelOpen) {
             InfoPanelView(model: model.info)

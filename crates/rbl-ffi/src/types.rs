@@ -342,6 +342,12 @@ pub enum WaveformKind {
     Mono,
     /// Six bytes a column (height, two unread, r, g, b): `PWV4`.
     Colour,
+    /// Three bytes a column at 150 columns a second: `PWV7`.
+    BandsDetail,
+    /// One byte a column, detail: `PWV3`.
+    MonoDetail,
+    /// Two bytes a column, detail: `PWV5`.
+    ColourDetail,
 }
 
 impl WaveformKind {
@@ -350,6 +356,9 @@ impl WaveformKind {
             Self::Bands => "bands",
             Self::Mono => "mono",
             Self::Colour => "colour",
+            Self::BandsDetail => "bandsDetail",
+            Self::MonoDetail => "monoDetail",
+            Self::ColourDetail => "colourDetail",
         }
     }
 }
