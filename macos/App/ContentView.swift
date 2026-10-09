@@ -28,6 +28,11 @@ struct ContentView: View {
             } detail: {
                 DetailView()
             }
+            .sheet(item: $model.smartEditor) { editor in
+                SmartEditorSheet(
+                    editor: editor, save: { Task { await model.saveSmartEditor(editor) } },
+                    cancel: { model.smartEditor = nil })
+            }
             .toolbar {
                 ToolbarItem(placement: .navigation) {
                     Toggle(isOn: Binding(get: { model.filterBarOpen }, set: { model.filterBarOpen = $0 })) {

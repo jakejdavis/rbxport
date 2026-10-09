@@ -41,6 +41,34 @@ protocol BackendProtocol: Sendable {
     func trackVocals(id: String) async throws -> Data
     /// The decks and the preview player.
     var playback: any PlaybackEngine { get }
+
+    // MARK: Editing. Every call passes the core's write gate and throws `FfiError.ReadOnly` when it is closed.
+
+    /// True when the loaded library is a generated fixture. Developer hooks that write need this.
+    func isFixtureLibrary() async -> Bool
+    /// Library Protection, as the app's setting stands.
+    func setProtectLibrary(_ protect: Bool) async
+    /// The undo/redo state and labels.
+    func editHistory() async -> EditHistory
+    func undo() async throws -> EditHistory
+    func redo() async throws -> EditHistory
+    /// New items return their id. `parent` is a playlist folder's id, or `"root"`.
+    func createPlaylist(name: String, parent: String) async throws -> String
+    func createFolder(name: String, parent: String) async throws -> String
+    func createSmartPlaylist(name: String, parent: String, rule: SmartRule) async throws -> String
+    func smartRule(playlistID: String) async throws -> SmartRule
+    func saveSmartPlaylist(playlistID: String, name: String, rule: SmartRule) async throws -> EditHistory
+    func renamePlaylist(id: String, name: String) async throws -> EditHistory
+    /// `index` counts the parent's children with the moved item lifted out; nil appends.
+    func movePlaylist(id: String, parent: String, index: UInt32?) async throws -> EditHistory
+    func deletePlaylist(id: String) async throws -> EditHistory
+    /// Sort Items: one undo step.
+    func sortChildren(parent: String) async throws -> EditHistory
+    /// Returns how many tracks were new to the playlist.
+    func addTracksToPlaylist(playlistID: String, trackIDs: [String]) async throws -> UInt32
+    func removeTracksFromPlaylist(playlistID: String, trackIDs: [String]) async throws -> EditHistory
+    /// Sets the playlist's full track order.
+    func reorderPlaylist(playlistID: String, trackIDs: [String]) async throws
 }
 
 /// Forwards the Rust core's callbacks into an `AsyncStream`.
@@ -126,6 +154,42 @@ actor Backend: BackendProtocol {
     func trackCues(id: String) async throws -> [Cue] { try core.trackCues(trackId: id) }
     func trackPhrases(id: String) async throws -> [Phrase] { try core.trackPhrases(trackId: id) }
     func trackVocals(id: String) async throws -> Data { Data(try core.trackVocals(trackId: id)) }
+
+    func isFixtureLibrary() async -> Bool { core.isFixtureLibrary() }
+    func setProtectLibrary(_ protect: Bool) async { core.setProtectLibrary(protect: protect) }
+    func editHistory() async -> EditHistory { core.editHistory() }
+    func undo() async throws -> EditHistory { try core.undo() }
+    func redo() async throws -> EditHistory { try core.redo() }
+    func createPlaylist(name: String, parent: String) async throws -> String {
+        try core.createPlaylist(name: name, parent: parent)
+    }
+    func createFolder(name: String, parent: String) async throws -> String {
+        try core.createFolder(name: name, parent: parent)
+    }
+    func createSmartPlaylist(name: String, parent: String, rule: SmartRule) async throws -> String {
+        try core.createSmartPlaylist(name: name, parent: parent, rule: rule)
+    }
+    func smartRule(playlistID: String) async throws -> SmartRule { try core.smartRule(playlistId: playlistID) }
+    func saveSmartPlaylist(playlistID: String, name: String, rule: SmartRule) async throws -> EditHistory {
+        try core.saveSmartPlaylist(playlistId: playlistID, name: name, rule: rule)
+    }
+    func renamePlaylist(id: String, name: String) async throws -> EditHistory {
+        try core.renamePlaylist(id: id, name: name)
+    }
+    func movePlaylist(id: String, parent: String, index: UInt32?) async throws -> EditHistory {
+        try core.movePlaylist(id: id, parent: parent, index: index)
+    }
+    func deletePlaylist(id: String) async throws -> EditHistory { try core.deletePlaylist(id: id) }
+    func sortChildren(parent: String) async throws -> EditHistory { try core.sortChildren(parent: parent) }
+    func addTracksToPlaylist(playlistID: String, trackIDs: [String]) async throws -> UInt32 {
+        try core.addTracksToPlaylist(playlistId: playlistID, trackIds: trackIDs)
+    }
+    func removeTracksFromPlaylist(playlistID: String, trackIDs: [String]) async throws -> EditHistory {
+        try core.removeTracksFromPlaylist(playlistId: playlistID, trackIds: trackIDs)
+    }
+    func reorderPlaylist(playlistID: String, trackIDs: [String]) async throws {
+        try core.reorderPlaylist(playlistId: playlistID, trackIds: trackIDs)
+    }
 }
 
 func describe(_ error: Error) -> String {

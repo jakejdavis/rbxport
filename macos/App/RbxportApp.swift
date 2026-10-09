@@ -30,12 +30,32 @@ struct RbxportApp: App {
                 .task {
                     guard !isUnderTest else { return }
                     applyDevHooks()
+                    model.readOnlyPollInterval = .seconds(3)
                     model.start()
+                    runEditHooks()
                     model.player.installKeyMonitor()
                 }
         }
         .defaultSize(width: 1280, height: 900)
         .commands {
+            CommandGroup(replacing: .undoRedo) {
+                Button(model.undoMenuTitle) { model.performHistoryCommand(redo: false) }
+                    .keyboardShortcut("z", modifiers: .command)
+                    .disabled(!model.canUndo && !(NSApp.keyWindow?.firstResponder is NSTextView))
+                Button(model.redoMenuTitle) { model.performHistoryCommand(redo: true) }
+                    .keyboardShortcut("z", modifiers: [.command, .shift])
+                    .disabled(!model.canRedo && !(NSApp.keyWindow?.firstResponder is NSTextView))
+            }
+            CommandGroup(after: .newItem) {
+                Button("New Playlist") { Task { await model.createPlaylist(near: model.selectedSidebarNode) } }
+                    .keyboardShortcut("n", modifiers: [.command, .option])
+                    .disabled(!model.canEdit)
+                Button("New Folder") { Task { await model.createFolder(near: model.selectedSidebarNode) } }
+                    .keyboardShortcut("n", modifiers: [.command, .option, .shift])
+                    .disabled(!model.canEdit)
+                Button("New Intelligent Playlist") { model.newSmartPlaylist(near: model.selectedSidebarNode) }
+                    .disabled(!model.canEdit)
+            }
             CommandGroup(after: .textEditing) {
                 Button("Find") { model.focusSearch() }.keyboardShortcut("f", modifiers: .command)
             }
@@ -90,7 +110,28 @@ struct RbxportApp: App {
             }
         }
         Settings {
-            SettingsView(player: model.player)
+            SettingsView(player: model.player, model: model)
+        }
+    }
+
+    /// Edit hooks for screenshots, since synthetic clicks do not reach SwiftUI. They write, so
+    /// `RBXPORT_DEMO_EDIT` runs only when `RBXPORT_FIXTURE_DIR` is set and the core confirms the
+    /// library is a fixture. `RBXPORT_OPEN_SMART_EDITOR=1` only opens the sheet.
+    @MainActor private func runEditHooks() {
+        let env = ProcessInfo.processInfo.environment
+        if let demo = env["RBXPORT_DEMO_EDIT"], env["RBXPORT_FIXTURE_DIR"] != nil {
+            Task { @MainActor in
+                await model.waitUntilSettled()
+                try? await Task.sleep(for: .milliseconds(500))
+                await model.runDemoEdit(demo)
+            }
+        }
+        if env["RBXPORT_OPEN_SMART_EDITOR"] == "1" {
+            Task { @MainActor in
+                await model.waitUntilSettled()
+                try? await Task.sleep(for: .milliseconds(900))
+                model.openDemoSmartEditor()
+            }
         }
     }
 

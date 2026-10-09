@@ -74,7 +74,7 @@ struct ContextMenuTests {
     }
 
     @Test func menusExistOnlyWhereRekordboxHasThem() {
-        #expect(ContextMenus.treeMenu(for: .section(.playlists)).map(titles) == ["Create New Playlist", "Create New Folder"])
+        #expect(ContextMenus.treeMenu(for: .section(.playlists)).map(titles) == ["Create New Playlist", "Create New Folder", "Create New Intelligent Playlist"])
         #expect(ContextMenus.treeMenu(for: .history) == nil)
         #expect(ContextMenus.treeMenu(for: .explorerFolder) == nil)
         #expect(ContextMenus.treeMenu(for: .allTracks) == nil)
@@ -117,7 +117,10 @@ struct ContextMenuTests {
         let model = AppModel(backend: MockBackend(), layoutStore: isolatedStore())
         model.start()
         #expect(await eventually { model.opened != nil })
-        #expect(model.trackMenuContext() == .init(selectionCount: 0))
+        // A protected library offers no edits, whatever playlists exist.
+        let context = model.trackMenuContext()
+        #expect(context.selectionCount == 0 && !context.editable && !context.inPlaylist)
+        #expect(context.playlists.map(\.id) == ["10", "11"])
         model.selectNode("tag")
         #expect(model.trackMenuContext().inTagList)
         model.selectNode("ex:/m")

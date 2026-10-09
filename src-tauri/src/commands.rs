@@ -17,14 +17,14 @@ use crate::dto::{
     EditHistoryDto, ImportReportDto, LibrarySummaryDto, LimiterDto, MissingTrackDto, MissingTracksDto, PhraseDto, RowDto,
     TreeNodeDto, ViewHandleDto, ViewSpecDto,
     BackupDto, DeviceSyncStateDto, DuplicateGroupDto, DuplicateTrackDto, DuplicatesDto,
-    ExportProgressDto, FilterValuesDto, ItunesLibraryDto, MissingExportFileDto, SmartConditionDto, SmartRuleDto, SyncDeviceReportDto, SyncPlaylistDto, SyncProgressDto,
+    ExportProgressDto, FilterValuesDto, ItunesLibraryDto, MissingExportFileDto, SmartRuleDto, SyncDeviceReportDto, SyncPlaylistDto, SyncProgressDto,
     XmlImportReportDto,
 };
 use crate::error::{AppError, AppResult, ErrorKind};
 use crate::state::{AppState, LibraryEdit};
 
 pub use rbl_app::browse::MAX_ROWS;
-pub(crate) use rbl_app::edits::{apply_history, history_dto, refresh_after_edit, touched_by, write_error, Touched};
+pub(crate) use rbl_app::edits::{write_error, Touched};
 
 /// Runs `f` on a blocking thread and converts a panic there into an `AppError`.
 pub(crate) async fn blocking<T, F>(name: &'static str, f: F) -> AppResult<T>
@@ -204,6 +204,15 @@ pub async fn track_pcm_waveform(
 
 // ---------------------------------------------------------------- editing
 
+/// Forwards the core's events to the webview under their historical names.
+pub(crate) struct RtSink<R: tauri::Runtime>(pub tauri::AppHandle<R>);
+
+impl<R: tauri::Runtime> rbl_app::EventSink for RtSink<R> {
+    fn emit(&self, event: rbl_app::AppEvent) {
+        let _ = tauri::Emitter::emit(&self.0, event.name(), &event);
+    }
+}
+
 /// Commits an edit and refreshes the affected index on the same connection.
 pub(crate) async fn edit<R: tauri::Runtime, F>(
     app: tauri::AppHandle<R>,
@@ -216,18 +225,7 @@ where
     F: FnOnce(&mut rbl_db::write::Writer) -> Result<(), rbl_db::DbError> + Send + 'static,
 {
     let state = Arc::clone(&state);
-    let event = touched.event();
-    let (generation, history) = blocking(name, move || {
-        let _gate = state.edit_gate.lock();
-        let generation = state.write_then(action, |db, ()| refresh_after_edit(&state, db, touched)).map_err(write_error)?;
-        // Any non-recorded edit after an undo starts a new branch.
-        let mut history = state.edit_history.lock();
-        history.clear_redo();
-        Ok((generation, history_dto(generation, &history)))
-    }).await?;
-    let _ = tauri::Emitter::emit(&app, event, generation);
-    let _ = tauri::Emitter::emit(&app, "edit-history:changed", history);
-    Ok(generation)
+    blocking(name, move || rbl_app::edits::commit(&state, &RtSink(app), touched, action)).await
 }
 
 /// Commits an edit that must never be traversed by undo and invalidates all
@@ -243,18 +241,7 @@ where
     F: FnOnce(&mut rbl_db::write::Writer) -> Result<(), rbl_db::DbError> + Send + 'static,
 {
     let state = Arc::clone(&state);
-    let event = touched.event();
-    let (generation, history) = blocking(name, move || {
-        let _gate = state.edit_gate.lock();
-        let generation = state.write_then(action, |db, ()| refresh_after_edit(&state, db, touched))
-            .map_err(write_error)?;
-        let mut history = state.edit_history.lock();
-        history.clear();
-        Ok((generation, history_dto(generation, &history)))
-    }).await?;
-    let _ = tauri::Emitter::emit(&app, event, generation);
-    let _ = tauri::Emitter::emit(&app, "edit-history:changed", history);
-    Ok(generation)
+    blocking(name, move || rbl_app::edits::commit_permanent(&state, &RtSink(app), touched, action)).await
 }
 
 pub(crate) async fn recorded_edit<R: tauri::Runtime, F>(
@@ -269,21 +256,7 @@ where
     F: FnOnce(&mut rbl_db::write::Writer) -> Result<LibraryEdit, rbl_db::DbError> + Send + 'static,
 {
     let state = Arc::clone(&state);
-    let dto = blocking(name, move || {
-        let _gate = state.edit_gate.lock();
-        let (generation, reversible) = state.write_then(
-            action,
-            |db, reversible| refresh_after_edit(&state, db, touched).map(|generation| (generation, reversible)),
-        ).map_err(write_error)?;
-        let mut history = state.edit_history.lock();
-        if !reversible.is_empty() {
-            history.record(reversible, label);
-        }
-        Ok(history_dto(generation, &history))
-    }).await?;
-    let _ = tauri::Emitter::emit(&app, "library:changed", dto.generation);
-    let _ = tauri::Emitter::emit(&app, "edit-history:changed", dto.clone());
-    Ok(dto)
+    blocking(name, move || rbl_app::edits::commit_recorded(&state, &RtSink(app), touched, label, action)).await
 }
 
 /// Re-reads the library on request: what the analysis queue asks for once
@@ -299,23 +272,7 @@ pub async fn reload_library<R: tauri::Runtime>(
 
 /// Re-reads the library and returns the new generation.
 pub(crate) async fn reload<R: tauri::Runtime>(app: tauri::AppHandle<R>, state: Arc<AppState>) -> AppResult<u32> {
-    let generation = blocking("reload", move || {
-        let _gate = state.edit_gate.lock();
-        let db = state.open_read_only().map_err(write_error)?;
-        let db_version = db.schema().db_version;
-        let location = db.location().clone();
-        let started = std::time::Instant::now();
-        let (library, _) = rbl_index::load(&db)
-            .map_err(|e| AppError::new(ErrorKind::Internal, e.to_string()))?;
-        let load_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let read_only = rbl_db::is_rekordbox_running();
-        state.set_library(library, read_only, db_version, load_ms, location);
-        Ok(state.summary().3)
-    })
-    .await?;
-    // Cached pages are keyed on the generation, so the frontend drops them.
-    let _ = tauri::Emitter::emit(&app, "library:changed", generation);
-    Ok(generation)
+    blocking("reload", move || rbl_app::edits::reload(&state, &RtSink(app))).await
 }
 
 /// LINK as it stands: on or off, on which interface, and who is listening.
@@ -2095,81 +2052,20 @@ pub async fn create_playlist<R: tauri::Runtime>(
     name: String,
     parent: String,
 ) -> AppResult<u32> {
-    edit(app, state, "create_playlist", Touched::Playlists, move |w| w.create_playlist(&name, &parent).map(|_| ())).await
+    let state = Arc::clone(&state);
+    blocking("create_playlist", move || {
+        let sink = RtSink(app);
+        rbl_app::edits::create_playlist(&state, &sink, &name, &parent).map(|_| state.summary().3)
+    })
+    .await
 }
 
 /// An intelligent playlist's rule, for the editor. Refused when the rule
 /// nests groups, which the editor cannot show without losing them.
 #[tauri::command]
 pub async fn smart_rule(state: State<'_, Arc<AppState>>, playlist: String) -> AppResult<SmartRuleDto> {
-    let library = state.library()?;
-    blocking("smart_rule", move || {
-        let playlists = library.playlists();
-        let Some(index) = playlist.parse::<u64>().ok().and_then(|id| playlists.index_of(id)) else {
-            return Err(AppError::new(ErrorKind::NotFound, "That playlist is not in the library."));
-        };
-        let Some(rule) = playlists.smart_rule(index) else {
-            // A new intelligent playlist, or one whose rule does not parse,
-            // starts from an empty "all of the following".
-            return Ok(SmartRuleDto { logic: "all".to_owned(), conditions: Vec::new() });
-        };
-        rule_to_dto(&rule)
-    })
-    .await
-}
-
-fn rule_to_dto(rule: &rbl_index::SmartRule) -> AppResult<SmartRuleDto> {
-    use rbl_index::smart::{Item, Logic};
-    let mut conditions = Vec::with_capacity(rule.root.items.len());
-    for item in &rule.root.items {
-        match item {
-            Item::Condition(c) => conditions.push(SmartConditionDto {
-                property: c.property.name().to_owned(),
-                operator: c.operator.code().to_owned(),
-                left: c.left.clone(),
-                right: c.right.clone(),
-                unit: c.unit.clone(),
-            }),
-            Item::Group(_) => {
-                return Err(AppError::new(
-                    ErrorKind::Malformed,
-                    "This intelligent playlist nests groups of conditions, which this editor cannot show.",
-                ))
-            }
-        }
-    }
-    Ok(SmartRuleDto {
-        logic: match rule.root.logic {
-            Logic::All => "all",
-            Logic::Any => "any",
-        }
-        .to_owned(),
-        conditions,
-    })
-}
-
-fn rule_from_dto(dto: &SmartRuleDto) -> AppResult<rbl_index::SmartRule> {
-    use rbl_index::smart::{Condition, Group, Item, Logic, Operator, Property};
-    let mut items = Vec::with_capacity(dto.conditions.len());
-    for c in &dto.conditions {
-        let property = Property::from_name(&c.property);
-        if property == Property::Unsupported {
-            return Err(AppError::new(ErrorKind::Malformed, format!("{:?} is not a property a rule can use here.", c.property)));
-        }
-        let Some(operator) = Operator::from_code(&c.operator) else {
-            return Err(AppError::new(ErrorKind::Malformed, format!("{:?} is not an operator.", c.operator)));
-        };
-        items.push(Item::Condition(Condition {
-            property,
-            operator,
-            left: c.left.clone(),
-            right: c.right.clone(),
-            unit: c.unit.clone(),
-        }));
-    }
-    Ok(rbl_index::SmartRule {
-        root: Group { logic: if dto.logic == "any" { Logic::Any } else { Logic::All }, items },
-    })
+    let state = Arc::clone(&state);
+    blocking("smart_rule", move || rbl_app::edits::smart_rule(&state, &playlist)).await
 }
 
 /// Create New Intelligent Playlist: a rule under `parent`, named as given.
@@ -2181,9 +2077,10 @@ pub async fn create_smart_playlist<R: tauri::Runtime>(
     parent: String,
     rule: SmartRuleDto,
 ) -> AppResult<u32> {
-    let rule = rule_from_dto(&rule)?;
-    edit(app, state, "create_smart_playlist", Touched::Playlists, move |w| {
-        w.create_smart_playlist(&name, &parent, |id| rule.to_xml(id.parse().unwrap_or(0))).map(|_| ())
+    let state = Arc::clone(&state);
+    blocking("create_smart_playlist", move || {
+        let sink = RtSink(app);
+        rbl_app::edits::create_smart_playlist(&state, &sink, &name, &parent, &rule).map(|_| state.summary().3)
     })
     .await
 }
@@ -2196,9 +2093,8 @@ pub async fn set_smart_rule<R: tauri::Runtime>(
     playlist: String,
     rule: SmartRuleDto,
 ) -> AppResult<u32> {
-    let rule = rule_from_dto(&rule)?;
-    let xml = rule.to_xml(playlist.parse().unwrap_or(0));
-    edit(app, state, "set_smart_rule", Touched::Playlists, move |w| w.set_smart_list(&playlist, &xml).map(|_| ())).await
+    let state = Arc::clone(&state);
+    blocking("set_smart_rule", move || rbl_app::edits::set_smart_rule(&state, &RtSink(app), &playlist, &rule)).await
 }
 
 #[tauri::command]
@@ -2208,7 +2104,12 @@ pub async fn create_folder<R: tauri::Runtime>(
     name: String,
     parent: String,
 ) -> AppResult<u32> {
-    edit(app, state, "create_folder", Touched::Playlists, move |w| w.create_folder(&name, &parent).map(|_| ())).await
+    let state = Arc::clone(&state);
+    blocking("create_folder", move || {
+        let sink = RtSink(app);
+        rbl_app::edits::create_folder(&state, &sink, &name, &parent).map(|_| state.summary().3)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -2218,9 +2119,8 @@ pub async fn rename_playlist<R: tauri::Runtime>(
     id: String,
     name: String,
 ) -> AppResult<EditHistoryDto> {
-    recorded_edit(app, state, "rename_playlist", Touched::Playlists, "Rename Playlist", move |w| {
-        w.rename_with_undo(&id, &name).map(|(_, edit)| LibraryEdit::RenamePlaylist(edit))
-    }).await
+    let state = Arc::clone(&state);
+    blocking("rename_playlist", move || rbl_app::edits::rename_playlist(&state, &RtSink(app), &id, &name)).await
 }
 
 #[tauri::command]
@@ -2231,9 +2131,8 @@ pub async fn move_playlist<R: tauri::Runtime>(
     parent: String,
     index: Option<usize>,
 ) -> AppResult<EditHistoryDto> {
-    recorded_edit(app, state, "move_playlist", Touched::Playlists, "Move Playlist", move |w| {
-        w.move_with_undo(&id, &parent, index).map(|(_, edit)| LibraryEdit::MovePlaylist(edit))
-    }).await
+    let state = Arc::clone(&state);
+    blocking("move_playlist", move || rbl_app::edits::move_playlist(&state, &RtSink(app), &id, &parent, index)).await
 }
 
 #[tauri::command]
@@ -2242,9 +2141,8 @@ pub async fn delete_playlist<R: tauri::Runtime>(
     state: State<'_, Arc<AppState>>,
     id: String,
 ) -> AppResult<EditHistoryDto> {
-    recorded_edit(app, state, "delete_playlist", Touched::Playlists, "Delete Playlist", move |w| {
-        w.delete_playlist_with_undo(&id).map(|(_, edit)| LibraryEdit::DeletePlaylist(edit))
-    }).await
+    let state = Arc::clone(&state);
+    blocking("delete_playlist", move || rbl_app::edits::delete_playlist(&state, &RtSink(app), &id)).await
 }
 
 #[tauri::command]
@@ -2253,23 +2151,7 @@ pub async fn undo_edit<R: tauri::Runtime>(
     state: State<'_, Arc<AppState>>,
 ) -> AppResult<EditHistoryDto> {
     let state = Arc::clone(&state);
-    let dto = blocking("undo_edit", move || {
-        let _gate = state.edit_gate.lock();
-        let entry = state.edit_history.lock().undo.last().cloned()
-            .ok_or_else(|| AppError::new(ErrorKind::NotFound, "There is no library edit to undo."))?;
-        let touched = touched_by(&entry.edit);
-        let generation = state.write_then(
-            |w| apply_history(w, &entry.edit, true),
-            |db, ()| refresh_after_edit(&state, db, touched),
-        ).map_err(write_error)?;
-        let mut history = state.edit_history.lock();
-        history.undo.pop();
-        history.redo.push(entry);
-        Ok(history_dto(generation, &history))
-    }).await?;
-    let _ = tauri::Emitter::emit(&app, "library:changed", dto.generation);
-    let _ = tauri::Emitter::emit(&app, "edit-history:changed", dto.clone());
-    Ok(dto)
+    blocking("undo_edit", move || rbl_app::edits::undo(&state, &RtSink(app))).await
 }
 
 #[tauri::command]
@@ -2278,23 +2160,7 @@ pub async fn redo_edit<R: tauri::Runtime>(
     state: State<'_, Arc<AppState>>,
 ) -> AppResult<EditHistoryDto> {
     let state = Arc::clone(&state);
-    let dto = blocking("redo_edit", move || {
-        let _gate = state.edit_gate.lock();
-        let entry = state.edit_history.lock().redo.last().cloned()
-            .ok_or_else(|| AppError::new(ErrorKind::NotFound, "There is no library edit to redo."))?;
-        let touched = touched_by(&entry.edit);
-        let generation = state.write_then(
-            |w| apply_history(w, &entry.edit, false),
-            |db, ()| refresh_after_edit(&state, db, touched),
-        ).map_err(write_error)?;
-        let mut history = state.edit_history.lock();
-        history.redo.pop();
-        history.undo.push(entry);
-        Ok(history_dto(generation, &history))
-    }).await?;
-    let _ = tauri::Emitter::emit(&app, "library:changed", dto.generation);
-    let _ = tauri::Emitter::emit(&app, "edit-history:changed", dto.clone());
-    Ok(dto)
+    blocking("redo_edit", move || rbl_app::edits::redo(&state, &RtSink(app))).await
 }
 
 #[tauri::command]
@@ -2304,8 +2170,10 @@ pub async fn add_tracks_to_playlist<R: tauri::Runtime>(
     playlist: String,
     tracks: Vec<String>,
 ) -> AppResult<u32> {
-    edit(app, state, "add_tracks_to_playlist", Touched::Playlists, move |w| {
-        w.add_tracks(&playlist, &tracks).map(|_| ())
+    let state = Arc::clone(&state);
+    blocking("add_tracks_to_playlist", move || {
+        let sink = RtSink(app);
+        rbl_app::edits::add_tracks_to_playlist(&state, &sink, &playlist, &tracks).map(|_| state.summary().3)
     })
     .await
 }
@@ -2361,9 +2229,8 @@ pub async fn remove_tracks_from_playlist<R: tauri::Runtime>(
     playlist: String,
     tracks: Vec<String>,
 ) -> AppResult<EditHistoryDto> {
-    recorded_edit(app, state, "remove_tracks_from_playlist", Touched::Playlists, "Remove Tracks from Playlist", move |w| {
-        w.remove_tracks_with_undo(&playlist, &tracks).map(|(_, edit)| LibraryEdit::RemovePlaylistTracks(edit))
-    }).await
+    let state = Arc::clone(&state);
+    blocking("remove_tracks_from_playlist", move || rbl_app::edits::remove_tracks_from_playlist(&state, &RtSink(app), &playlist, &tracks)).await
 }
 
 /// Tracks that share a title and an artist, case and accents aside.
@@ -2791,7 +2658,8 @@ pub async fn reorder_playlist<R: tauri::Runtime>(
     playlist: String,
     tracks: Vec<String>,
 ) -> AppResult<u32> {
-    edit(app, state, "reorder_playlist", Touched::Playlists, move |w| w.reorder(&playlist, &tracks).map(|_| ())).await
+    let state = Arc::clone(&state);
+    blocking("reorder_playlist", move || rbl_app::edits::reorder_playlist(&state, &RtSink(app), &playlist, &tracks)).await
 }
 
 #[tauri::command]

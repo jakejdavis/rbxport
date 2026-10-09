@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use rbl_app::{AppEvent, EventSink};
 
-use crate::types::{EditHistory, LibraryProblem};
+use crate::types::{EditHistory, ImportProgress, LibraryProblem};
 
 /// Something that happened which the UI may want to redraw for.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
@@ -14,6 +14,11 @@ pub enum LibraryEvent {
     LibraryChanged { generation: u32 },
     TagListChanged { generation: u32 },
     EditHistoryChanged { history: EditHistory },
+    CuesChanged { track_id: String },
+    GridChanged { track_id: String },
+    AnalysisChanged { track_id: String },
+    DevicesChanged,
+    ImportProgress { progress: ImportProgress },
 }
 
 /// Implemented in Swift. Called from whichever thread raised the event, so

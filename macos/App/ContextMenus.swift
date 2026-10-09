@@ -8,6 +8,17 @@ enum MenuCommand: Equatable, Sendable {
     /// Load the selected track onto a deck (Player 1 is deck A).
     case loadToDeck(Deck)
     case exportPlaylist(PlaylistFileFormat)
+    // Edits. Live only while the library may be edited.
+    case createPlaylist
+    case createFolder
+    case createSmartPlaylist
+    case editSmartPlaylist
+    case rename
+    case delete
+    case sortItems
+    /// Add the selected tracks to the playlist with this id.
+    case addToPlaylist(String)
+    case removeFromPlaylist
 }
 
 struct MenuItemSpec: Equatable {
@@ -49,6 +60,12 @@ enum ContextMenus {
         var inTagList = false
         /// The view is the Explorer: no "Convert Memory Cues to Hot Cues".
         var inExplorer = false
+        /// The library may be edited (the write gate is open).
+        var editable = false
+        /// Playlists "Add To Playlist" offers.
+        var playlists: [PlaylistTarget] = []
+        /// The view is an ordinary playlist, so tracks can be taken out of it.
+        var inPlaylist = false
     }
 
     /// Right-clicking a track, top to bottom as `TRACK_MENU` has it. Show in Finder, Show
@@ -69,7 +86,7 @@ enum ContextMenus {
             grey("Analyze Track"),
             grey("Analysis Lock", [grey("On"), grey("Off")]),
             .separator,
-            grey("Add To Playlist", []),
+            addToPlaylist(context),
             grey("Add To Tag List"),
             grey("Reload Tag"),
             grey("Get Info from iTunes"),
@@ -84,7 +101,10 @@ enum ContextMenus {
         if !context.inExplorer { rows.append(grey("Convert Memory Cues to Hot Cues")) }
         rows += [
             .separator,
-            grey(context.inTagList ? "Remove from Tag List" : "Remove from Playlist"),
+            context.inTagList
+                ? grey("Remove from Tag List")
+                : (context.editable && context.inPlaylist && hasSelection
+                    ? live("Remove from Playlist", .removeFromPlaylist) : grey("Remove from Playlist")),
             grey("Remove from Collection"),
             grey("Remove from History"),
             .separator,
@@ -96,26 +116,42 @@ enum ContextMenus {
         return rows
     }
 
+    /// "Add To Playlist ▸": every ordinary playlist as `Folder › Playlist`, live for a selection.
+    private static func addToPlaylist(_ context: TrackContext) -> MenuRow {
+        guard context.editable, context.selectionCount > 0 else { return grey("Add To Playlist", []) }
+        return .item(
+            MenuItemSpec(
+                title: "Add To Playlist", command: nil,
+                submenu: context.playlists.map { live($0.title, .addToPlaylist($0.id)) }))
+    }
+
     // MARK: Tree nodes
 
-    /// The menu for a source-list node, or nil where rekordbox has none.
-    static func treeMenu(for kind: SidebarNode.Kind) -> [MenuRow]? {
+    /// The menu for a source-list node, or nil where rekordbox has none. The edit entries are
+    /// live when `editable`, greyed otherwise.
+    static func treeMenu(for kind: SidebarNode.Kind, editable: Bool = false) -> [MenuRow]? {
+        func edit(_ title: String, _ command: MenuCommand) -> MenuRow { editable ? live(title, command) : grey(title) }
         switch kind {
         case .section(.playlists):
-            return [grey("Create New Playlist"), grey("Create New Folder")]
+            return [
+                edit("Create New Playlist", .createPlaylist),
+                edit("Create New Folder", .createFolder),
+                edit("Create New Intelligent Playlist", .createSmartPlaylist),
+            ]
         case .folder:
             return [
                 grey("Export Folder", []),
                 .separator,
-                grey("Create New Playlist"),
-                grey("Create New Folder"),
+                edit("Create New Playlist", .createPlaylist),
+                edit("Create New Folder", .createFolder),
+                edit("Create New Intelligent Playlist", .createSmartPlaylist),
                 .separator,
                 grey("Playlist display setting"),
                 .separator,
-                grey("Rename Folder"),
-                grey("Delete Folder"),
+                edit("Rename Folder", .rename),
+                edit("Delete Folder", .delete),
                 .separator,
-                grey("Sort Items"),
+                edit("Sort Items", .sortItems),
                 .separator,
                 grey("Add To Shortcut"),
             ]
@@ -123,18 +159,19 @@ enum ContextMenus {
             var rows: [MenuRow] = [
                 grey("Export Playlist", []),
                 .separator,
-                grey("Create New Playlist"),
+                edit("Create New Playlist", .createPlaylist),
             ]
-            if kind == .smartPlaylist { rows.append(grey("Edit Intelligent Playlist")) }
+            if kind == .smartPlaylist { rows.append(edit("Edit Intelligent Playlist", .editSmartPlaylist)) }
             rows += [
-                grey("Create New Folder"),
+                edit("Create New Folder", .createFolder),
+                edit("Create New Intelligent Playlist", .createSmartPlaylist),
                 .separator,
                 grey("Playlist display setting"),
                 .separator,
                 grey("Add Artwork"),
                 .separator,
-                grey("Rename Playlist"),
-                grey("Delete Playlist"),
+                edit("Rename Playlist", .rename),
+                edit("Delete Playlist", .delete),
                 .separator,
                 .item(
                     MenuItemSpec(

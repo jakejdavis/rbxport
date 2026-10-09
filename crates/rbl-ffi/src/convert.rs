@@ -12,6 +12,7 @@ use crate::types::{
     BpmFilter, CountedBpm, CountedKey, Device, DeviceExport, EditHistory, ExplorerChildren, ExplorerRoot, FilterValues,
     TagCategory, TrackFilter, ExtraColumn, ExtraFields, HotCue, LibraryProblem, LibrarySummary, LoadOutcome, NodeKind, Row, SearchField, SortKey,
     TrackSource, TreeNode, ViewHandle, ViewSpec, TrackDetails, TrackLookups, MyTag, MyTagCategory,
+    ImportProgress, SmartCondition, SmartLogic, SmartRule,
 };
 
 impl SortKey {
@@ -331,6 +332,13 @@ impl From<AppEvent> for LibraryEvent {
             AppEvent::LibraryChanged(generation) => Self::LibraryChanged { generation },
             AppEvent::TagListChanged(generation) => Self::TagListChanged { generation },
             AppEvent::EditHistoryChanged(history) => Self::EditHistoryChanged { history: history.into() },
+            AppEvent::CuesChanged(track_id) => Self::CuesChanged { track_id },
+            AppEvent::GridChanged(track_id) => Self::GridChanged { track_id },
+            AppEvent::AnalysisChanged(track_id) => Self::AnalysisChanged { track_id },
+            AppEvent::DevicesChanged => Self::DevicesChanged,
+            AppEvent::ImportProgress(p) => Self::ImportProgress {
+                progress: ImportProgress { path: p.path, state: p.state.to_owned(), done: p.done, total: p.total, title: p.title },
+            },
         }
     }
 }
@@ -398,6 +406,36 @@ impl From<rbl_app::dto::TrackLookupsDto> for TrackLookups {
                     name: c.name,
                     tags: c.tags.into_iter().map(|t| MyTag { id: t.id, name: t.name }).collect(),
                 })
+                .collect(),
+        }
+    }
+}
+
+impl From<rbl_app::dto::SmartRuleDto> for SmartRule {
+    fn from(rule: rbl_app::dto::SmartRuleDto) -> Self {
+        Self {
+            logic: if rule.logic == "any" { SmartLogic::Any } else { SmartLogic::All },
+            conditions: rule
+                .conditions
+                .into_iter()
+                .map(|c| SmartCondition { property: c.property, operator: c.operator, left: c.left, right: c.right, unit: c.unit })
+                .collect(),
+        }
+    }
+}
+
+impl From<SmartRule> for rbl_app::dto::SmartRuleDto {
+    fn from(rule: SmartRule) -> Self {
+        Self {
+            logic: match rule.logic {
+                SmartLogic::All => "all",
+                SmartLogic::Any => "any",
+            }
+            .to_owned(),
+            conditions: rule
+                .conditions
+                .into_iter()
+                .map(|c| rbl_app::dto::SmartConditionDto { property: c.property, operator: c.operator, left: c.left, right: c.right, unit: c.unit })
                 .collect(),
         }
     }

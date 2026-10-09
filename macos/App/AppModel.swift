@@ -45,12 +45,30 @@ final class AppModel {
     let layoutStore: ColumnLayoutStore
 
     private(set) var phase: Phase = .loading
-    private(set) var summary: LibrarySummary?
+    var summary: LibrarySummary?
     let sidebar: SidebarModel
     private(set) var opened: OpenedView?
     private(set) var viewError: String?
     /// A transient message for the status line (an export finished, a reveal failed).
-    private(set) var notice: String?
+    var notice: String?
+
+    /// The undo/redo state, as the core last announced it.
+    var editHistory = EditHistory(generation: 0, canUndo: false, canRedo: false, undoLabel: nil, redoLabel: nil)
+    /// The open smart-playlist editor sheet, if any.
+    var smartEditor: SmartEditorModel?
+    /// Library Protection (Settings > General). On by default, as in the React app. Persisted;
+    /// pushed to the core, whose write gate is the single authority.
+    var protectLibrary: Bool {
+        didSet {
+            guard protectLibrary != oldValue else { return }
+            layoutStore.defaults.set(protectLibrary, forKey: Self.protectLibraryKey)
+            Task { await applyProtection() }
+        }
+    }
+    static let protectLibraryKey = "protectLibrary"
+    /// How often the summary is re-read to notice rekordbox starting or quitting. Off in tests.
+    var readOnlyPollInterval: Duration?
+    @ObservationIgnored var pollTask: Task<Void, Never>?
 
     /// The selected source-list node, by id (`all`, `pl:10`, `hi:3`, `ex:/path`, `tag`).
     /// Persisted across launches.
@@ -163,6 +181,7 @@ final class AppModel {
         self.layoutStore = layoutStore
         sidebar = SidebarModel(backend: backend, defaults: layoutStore.defaults)
         selectedNodeID = layoutStore.defaults.string(forKey: SidebarModel.Keys.selected)
+        protectLibrary = (layoutStore.defaults.object(forKey: Self.protectLibraryKey) as? Bool) ?? true
         filterBarOpen = layoutStore.defaults.bool(forKey: "filterBar.open")
         pager = RowPager(backend: backend)
         layout = layoutStore.load(.collection)
@@ -200,7 +219,12 @@ final class AppModel {
             }
         }
         // Loading decrypts and indexes the whole library: the backend runs it off the main actor.
-        loadTask = Task { _ = await backend.loadLibrary() }
+        let protect = protectLibrary
+        loadTask = Task {
+            await backend.setProtectLibrary(protect)
+            _ = await backend.loadLibrary()
+        }
+        startReadOnlyPolling()
     }
 
     /// Waits for the initial load and the events it raised to be handled. For tests.
@@ -226,12 +250,14 @@ final class AppModel {
             case .failed(let message): phase = .failed(message)
             case .missing(let masterDb): phase = .failed("No rekordbox library found at \(masterDb).")
             }
-        case .tagListChanged, .editHistoryChanged:
+        case .editHistoryChanged(let history):
+            editHistory = history
+        case .tagListChanged, .cuesChanged, .gridChanged, .analysisChanged, .devicesChanged, .importProgress:
             break
         }
     }
 
-    private func refresh(selectFirst: Bool) async {
+    func refresh(selectFirst: Bool) async {
         do {
             async let loadedSummary = backend.summary()
             async let loadedTree = backend.playlistTree()
@@ -518,7 +544,8 @@ final class AppModel {
     func trackMenuContext() -> ContextMenus.TrackContext {
         ContextMenus.TrackContext(
             selectionCount: selectedIDs.count, inTagList: selectedNodeID == "tag",
-            inExplorer: selectedNodeID?.hasPrefix("ex:") ?? false)
+            inExplorer: selectedNodeID?.hasPrefix("ex:") ?? false, editable: canEdit,
+            playlists: sidebar.playlistTargets(), inPlaylist: openPlaylistID != nil)
     }
 
     /// Runs a live entry of the track menu on the selection.
@@ -530,7 +557,11 @@ final class AppModel {
         case .showInformation: showInformation()
         case .loadToDeck(let deck):
             if let id = selectedIDs.first, selectedIDs.count == 1 { player.load(trackID: id, row: loadedRow(id: id), into: deck) }
-        case .exportPlaylist: break
+        case .addToPlaylist(let id): Task { await addSelectionToPlaylist(id) }
+        case .removeFromPlaylist: Task { await removeSelectionFromPlaylist() }
+        case .exportPlaylist, .createPlaylist, .createFolder, .createSmartPlaylist, .editSmartPlaylist, .rename, .delete,
+            .sortItems:
+            break
         }
     }
 

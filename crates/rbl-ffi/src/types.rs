@@ -485,3 +485,39 @@ impl From<rbl_app::dto::PhraseDto> for Phrase {
         Self { beat: p.beat, label: p.label, kind: p.kind, time_ms: p.time_ms }
     }
 }
+
+/// Whether a smart playlist needs every condition or any one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum SmartLogic {
+    All,
+    Any,
+}
+
+/// One line of a smart playlist rule, in rekordbox's vocabulary: the property's
+/// internal name (empty when the library holds a property this build cannot
+/// write), the operator number as text ("1" equal ... "11" ends with), and the
+/// value(s). `unit` is `day`, `week`, `month` or `year` for the "in the last" operators.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SmartCondition {
+    pub property: String,
+    pub operator: String,
+    pub left: String,
+    pub right: String,
+    pub unit: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SmartRule {
+    pub logic: SmartLogic,
+    pub conditions: Vec<SmartCondition>,
+}
+
+/// Progress of an XML / iTunes import.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ImportProgress {
+    pub path: String,
+    pub state: String,
+    pub done: u32,
+    pub total: u32,
+    pub title: String,
+}
