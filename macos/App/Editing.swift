@@ -185,7 +185,7 @@ extension AppModel {
 
     /// Runs one edit. A refusal or failure lands verbatim in the status line; nil comes back.
     @discardableResult
-    func performEdit<T>(_ work: () async throws -> T) async -> T? {
+    func performEdit<T>(_ work: @MainActor () async throws -> T) async -> T? {
         do {
             return try await work()
         } catch {

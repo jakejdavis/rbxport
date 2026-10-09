@@ -25,20 +25,27 @@ struct MixerKnob: View {
             Text(title).font(.system(size: 8, weight: .bold)).foregroundStyle(PlayerStyle.dim)
             Canvas { context, size in
                 let centre = CGPoint(x: size.width / 2, y: size.height / 2)
-                let radius = min(size.width, size.height) / 2 - 1
+                let radius: CGFloat = min(size.width, size.height) / 2 - 1
+                let arcRadius: CGFloat = radius - 1
                 let sweep = Angle.degrees(270)
                 let start = Angle.degrees(135)
+                let end: Angle = start + sweep * fraction
                 var track = Path()
-                track.addArc(center: centre, radius: radius - 1, startAngle: start, endAngle: start + sweep, clockwise: false)
+                track.addArc(center: centre, radius: arcRadius, startAngle: start, endAngle: start + sweep, clockwise: false)
                 context.stroke(track, with: .color(PlayerStyle.well), lineWidth: 3)
                 var lit = Path()
-                lit.addArc(center: centre, radius: radius - 1, startAngle: start, endAngle: start + sweep * fraction, clockwise: false)
+                lit.addArc(center: centre, radius: arcRadius, startAngle: start, endAngle: end, clockwise: false)
                 context.stroke(lit, with: .color(accent), lineWidth: 3)
-                context.fill(Path(ellipseIn: CGRect(x: centre.x - radius + 4, y: centre.y - radius + 4, width: (radius - 4) * 2, height: (radius - 4) * 2)), with: .color(PlayerStyle.raised))
-                let angle = (start + sweep * fraction).radians
+                let knobRadius: CGFloat = radius - 4
+                let knob = CGRect(x: centre.x - knobRadius, y: centre.y - knobRadius, width: knobRadius * 2, height: knobRadius * 2)
+                context.fill(Path(ellipseIn: knob), with: .color(PlayerStyle.raised))
+                let angle: CGFloat = CGFloat(end.radians)
+                let direction = CGPoint(x: cos(angle), y: sin(angle))
+                let inner: CGFloat = radius - 9
+                let outer: CGFloat = radius - 4
                 var needle = Path()
-                needle.move(to: CGPoint(x: centre.x + cos(angle) * (radius - 9), y: centre.y + sin(angle) * (radius - 9)))
-                needle.addLine(to: CGPoint(x: centre.x + cos(angle) * (radius - 4), y: centre.y + sin(angle) * (radius - 4)))
+                needle.move(to: CGPoint(x: centre.x + direction.x * inner, y: centre.y + direction.y * inner))
+                needle.addLine(to: CGPoint(x: centre.x + direction.x * outer, y: centre.y + direction.y * outer))
                 context.stroke(needle, with: .color(PlayerStyle.text), lineWidth: 1.5)
             }
             .frame(width: diameter, height: diameter)
