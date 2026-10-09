@@ -31,7 +31,8 @@ pub use types::{
     FilterValues, PlaylistFileFormat, TagCategory, TrackFilter, ExtraFields, HotCue, LibraryProblem, LibrarySummary, LoadOutcome, NodeKind, Row,
     SearchField, SortKey,
     TrackDetails, TrackLookups, MyTag, MyTagCategory, WaveformKind,
-    TrackSource, TreeNode, ViewHandle, ViewSpec, ImportProgress, SmartCondition, SmartLogic, SmartRule,
+    TrackSource, TreeNode, ViewHandle, ViewSpec, ImportProgress, SmartCondition, SmartLogic, SmartRule, TrackField, ImportReport, XmlImportReport, MissingTracks, Duplicates,
+    RelocateReport,
 };
 
 uniffi::setup_scaffolding!();

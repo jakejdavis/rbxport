@@ -334,6 +334,8 @@ extension AppModel {
     func addToPlaylist(_ playlistID: String, trackIDs: [String]) async {
         guard !trackIDs.isEmpty else { return }
         let name = sidebar.node(withID: "pl:\(playlistID)")?.name ?? "the playlist"
+        // Files the Explorer lists are imported first, as the React app does.
+        guard let trackIDs = await collectionIDs(for: trackIDs), !trackIDs.isEmpty else { return }
         guard let added = await performEdit({ try await backend.addTracksToPlaylist(playlistID: playlistID, trackIDs: trackIDs) })
         else { return }
         notice = added == 0 ? "Already in \(name)." : "Added \(added) track\(added == 1 ? "" : "s") to \(name)."
@@ -415,6 +417,35 @@ extension AppModel {
         smartEditor = SmartEditorModel(mode: .create(parent: "root"), name: "Big Room Hits", rule: rule)
     }
 
+    /// `RBXPORT_DEMO_EDIT=metadata|missing|duplicates`: Phase 4b screenshots. They write (metadata,
+    /// duplicates) and so run only against a fixture, which `runDemoEdit` has already checked.
+    func runMetadataDemo(_ name: String) async {
+        let spec = ViewSpec(
+            source: .collection, sort: .trackNo, descending: false, query: "", searchField: .all,
+            filter: TrackFilter(bpm: nil, keys: nil, ratings: nil, colors: nil))
+        guard let handle = try? await backend.openView(spec),
+            let ids = try? await backend.viewIDsInRange(viewID: handle.viewId, from: 0, to: 9), ids.count >= 6
+        else { return }
+        switch name {
+        case "metadata":
+            _ = await performEdit { try await backend.setTrackRating(ids: [ids[0], ids[1]], stars: 4) }
+            _ = await performEdit { try await backend.setTrackRating(ids: [ids[2]], stars: 2) }
+            _ = await performEdit { try await backend.setTrackColor(ids: [ids[0]], color: 5) }
+            _ = await performEdit { try await backend.setTrackColor(ids: [ids[2]], color: 2) }
+            _ = await performEdit { try await backend.setTrackComment(ids: [ids[0]], comment: "Warm-up opener, long intro") }
+            _ = await performEdit { try await backend.setTrackField(ids: [ids[1]], field: .genre, value: "Deep House") }
+            _ = await performEdit { try await backend.addToTagList(ids: [ids[3], ids[4]]) }
+            notice = "Comment saved."
+            info.tab = .info
+            infoPanelOpen = true
+        case "duplicates":
+            _ = await performEdit { try await backend.setTrackField(ids: [ids[1], ids[2]], field: .title, value: "Track 000") }
+            openDuplicates()
+        default:
+            openMissingFiles()
+        }
+    }
+
     /// `RBXPORT_DEMO_EDIT=create-playlist`: makes a folder, a filled playlist and a smart
     /// playlist, for screenshots. It writes, so it runs only against a generated fixture.
     func runDemoEdit(_ name: String) async {
@@ -422,10 +453,16 @@ extension AppModel {
             notice = "Demo edits only run against a fixture library."
             return
         }
-        guard name == "create-playlist" else { return }
         // The setting is not touched: the hook opens the gate for this run only.
         await backend.setProtectLibrary(false)
         await refreshSummary()
+        switch name {
+        case "create-playlist": break
+        case "metadata", "missing", "duplicates":
+            await runMetadataDemo(name)
+            return
+        default: return
+        }
         guard let folder = await performEdit({ try await backend.createFolder(name: "Sets", parent: "root") }),
             let playlist = await performEdit({ try await backend.createPlaylist(name: "Demo Mix", parent: "root") })
         else { return }

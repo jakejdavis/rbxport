@@ -19,12 +19,24 @@ enum MenuCommand: Equatable, Sendable {
     /// Add the selected tracks to the playlist with this id.
     case addToPlaylist(String)
     case removeFromPlaylist
+    // Phase 4b.
+    case importToCollection
+    case addToTagList
+    case removeFromTagList
+    case reloadTag
+    case resetPlayCount
+    case removeFromCollection
+    case removeFromHistory
+    /// Colour 1 to 8, or 0 for none, on the selection.
+    case setColor(UInt8)
 }
 
 struct MenuItemSpec: Equatable {
     var title: String
     var command: MenuCommand?
     var submenu: [MenuRow]?
+    /// A colour dot drawn beside the title (0 draws the ring for none).
+    var colorDot: UInt8?
 
     /// A leaf is live when it has a command; a submenu when any of its entries is.
     var isEnabled: Bool {
@@ -66,6 +78,12 @@ enum ContextMenus {
         var playlists: [PlaylistTarget] = []
         /// The view is an ordinary playlist, so tracks can be taken out of it.
         var inPlaylist = false
+        /// The view is a history session, so plays can be taken off it.
+        var inHistory = false
+        /// Some selected rows are files the Explorer lists, not tracks of the collection.
+        var hasLoose = false
+        /// Every selected row is such a file.
+        var allLoose = false
     }
 
     /// Right-clicking a track, top to bottom as `TRACK_MENU` has it. Show in Finder, Show
@@ -73,6 +91,9 @@ enum ContextMenus {
     /// 2 PLAYER layout); the rest are edits (Phase 4).
     static func trackMenu(_ context: TrackContext) -> [MenuRow] {
         let hasSelection = context.selectionCount > 0
+        // Edits of the collection: a selection of collection tracks and an open write gate.
+        let edits = context.editable && hasSelection && !context.hasLoose
+        func edit(_ title: String, _ command: MenuCommand) -> MenuRow { edits ? live(title, command) : grey(title) }
         var rows: [MenuRow] = [
             .item(
                 MenuItemSpec(
@@ -82,31 +103,33 @@ enum ContextMenus {
                         context.selectionCount == 1 ? live("Load track to player 2", .loadToDeck(.b)) : grey("Load track to player 2"),
                     ])),
             .separator,
-            grey("Import To Collection"),
+            context.editable && context.hasLoose ? live("Import To Collection", .importToCollection) : grey("Import To Collection"),
             grey("Analyze Track"),
             grey("Analysis Lock", [grey("On"), grey("Off")]),
             .separator,
             addToPlaylist(context),
-            grey("Add To Tag List"),
-            grey("Reload Tag"),
+            edit("Add To Tag List", .addToTagList),
+            edit("Reload Tag", .reloadTag),
+            colorMenu(enabled: edits),
             grey("Get Info from iTunes"),
             grey("Track Type", []),
             .separator,
             grey("Export Track", []),
             .separator,
             grey("Auto Load Hot Cue", [grey("Enable Auto Load Hot Cue"), grey("Disable Auto Load Hot Cue")]),
-            grey("Reset DJ Play Count"),
+            edit("Reset DJ Play Count", .resetPlayCount),
             grey("Add New Analysis Data"),
         ]
         if !context.inExplorer { rows.append(grey("Convert Memory Cues to Hot Cues")) }
         rows += [
             .separator,
             context.inTagList
-                ? grey("Remove from Tag List")
+                ? (context.editable && hasSelection ? live("Remove from Tag List", .removeFromTagList) : grey("Remove from Tag List"))
                 : (context.editable && context.inPlaylist && hasSelection
                     ? live("Remove from Playlist", .removeFromPlaylist) : grey("Remove from Playlist")),
-            grey("Remove from Collection"),
-            grey("Remove from History"),
+            edit("Remove from Collection", .removeFromCollection),
+            context.editable && context.inHistory && hasSelection
+                ? live("Remove from History", .removeFromHistory) : grey("Remove from History"),
             .separator,
             hasSelection ? live("Show information", .showInformation) : grey("Show information"),
             hasSelection ? live("Show in Finder", .showInFinder) : grey("Show in Finder"),
@@ -114,6 +137,18 @@ enum ContextMenus {
             grey("Track information", [grey("Publish"), grey("Do not publish")]),
         ]
         return rows
+    }
+
+    /// "Color ▸": none, then the eight colours, each with its dot.
+    static func colorMenu(enabled: Bool) -> MenuRow {
+        let items: [MenuRow] = (0...8).map { id in
+            let color = UInt8(id)
+            return .item(
+                MenuItemSpec(
+                    title: TrackColors.name(color), command: enabled ? .setColor(color) : nil, submenu: nil,
+                    colorDot: color))
+        }
+        return .item(MenuItemSpec(title: "Color", command: nil, submenu: enabled ? items : []))
     }
 
     /// "Add To Playlist ▸": every ordinary playlist as `Folder › Playlist`, live for a selection.

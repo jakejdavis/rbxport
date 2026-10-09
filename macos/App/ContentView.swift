@@ -33,6 +33,12 @@ struct ContentView: View {
                     editor: editor, save: { Task { await model.saveSmartEditor(editor) } },
                     cancel: { model.smartEditor = nil })
             }
+            .sheet(item: $model.missingFiles) { missing in
+                MissingFilesSheet(model: missing, editable: model.canEdit, close: { model.missingFiles = nil })
+            }
+            .sheet(item: $model.duplicates) { duplicates in
+                DuplicatesSheet(model: duplicates, editable: model.canEdit, close: { model.duplicates = nil })
+            }
             .toolbar {
                 ToolbarItem(placement: .navigation) {
                     Toggle(isOn: Binding(get: { model.filterBarOpen }, set: { model.filterBarOpen = $0 })) {
@@ -153,6 +159,9 @@ struct StatusLine: View {
                 Text(s.readOnly ? "Read-only" : "Read-write")
                 Text("Loaded in \(s.loadMs) ms")
             }
+            if let progress = model.importProgress {
+                ImportProgressView(progress: progress)
+            }
             Spacer()
             if let notice = model.notice {
                 Text(notice).foregroundStyle(.primary)
@@ -216,5 +225,23 @@ struct MasterLevelControl: View {
         .help("Master level (10 is the default, 11 is +2 dB)")
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Master level")
+    }
+}
+
+/// The status bar's import progress: a bar and what is being read.
+struct ImportProgressView: View {
+    let progress: ImportProgressState
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let fraction = progress.fraction {
+                ProgressView(value: fraction).frame(width: 90)
+            } else {
+                ProgressView().controlSize(.small)
+            }
+            Text(progress.text).lineLimit(1).truncationMode(.middle).frame(maxWidth: 320, alignment: .leading)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("import-progress")
     }
 }

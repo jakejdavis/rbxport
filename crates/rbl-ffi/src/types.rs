@@ -521,3 +521,124 @@ pub struct ImportProgress {
     pub total: u32,
     pub title: String,
 }
+
+/// A field of the Info tab that can be written as text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum TrackField {
+    Title,
+    Artist,
+    Album,
+    Genre,
+    Label,
+    Year,
+    TrackNumber,
+    DiscNumber,
+    OriginalArtist,
+    Composer,
+    Remixer,
+    Lyricist,
+    PlayCount,
+    Key,
+    /// Whole-grid tempo, 40 to 499. One track at a time.
+    Bpm,
+}
+
+impl TrackField {
+    /// The name the core's field parser accepts.
+    pub(crate) fn wire(self) -> &'static str {
+        match self {
+            Self::Title => "title",
+            Self::Artist => "artist",
+            Self::Album => "album",
+            Self::Genre => "genre",
+            Self::Label => "label",
+            Self::Year => "year",
+            Self::TrackNumber => "trackNumber",
+            Self::DiscNumber => "discNumber",
+            Self::OriginalArtist => "originalArtist",
+            Self::Composer => "composer",
+            Self::Remixer => "remixer",
+            Self::Lyricist => "lyricist",
+            Self::PlayCount => "playCount",
+            Self::Key => "key",
+            Self::Bpm => "bpm",
+        }
+    }
+}
+
+/// A track an import added or found, by id and file name.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ImportedTrack {
+    pub id: String,
+    pub title: String,
+}
+
+/// What importing files and folders did.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ImportReport {
+    pub imported: u32,
+    /// One line per file that was not imported, saying why.
+    pub skipped: Vec<String>,
+    pub tracks: Vec<ImportedTrack>,
+    /// Files already in the library, with their track ids.
+    pub existing: Vec<ImportedTrack>,
+}
+
+/// What importing a rekordbox XML collection did.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct XmlImportReport {
+    pub imported: u32,
+    pub existing: u32,
+    pub skipped: Vec<String>,
+    pub playlists: u32,
+    pub cues: u32,
+    pub tracks: Vec<ImportedTrack>,
+}
+
+/// A track whose audio file is not where the library says.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct MissingTrack {
+    pub id: String,
+    pub title: String,
+    pub artist: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct MissingTracks {
+    /// Every missing track, not just the ones listed.
+    pub total: u32,
+    pub tracks: Vec<MissingTrack>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct DuplicateTrack {
+    pub id: String,
+    pub path: String,
+    pub duration_sec: u32,
+    /// Whether the file is where the library says.
+    pub present: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct DuplicateGroup {
+    pub title: String,
+    pub artist: String,
+    pub tracks: Vec<DuplicateTrack>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct Duplicates {
+    /// Every group, not just the ones listed.
+    pub groups: u32,
+    /// Copies beyond the first, over every group.
+    pub extra: u32,
+    pub shown: Vec<DuplicateGroup>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct RelocateReport {
+    pub relocated: u32,
+    /// Missing tracks whose file name was found in none of the folders.
+    pub unresolved: u32,
+}

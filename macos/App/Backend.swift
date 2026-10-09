@@ -69,6 +69,30 @@ protocol BackendProtocol: Sendable {
     func removeTracksFromPlaylist(playlistID: String, trackIDs: [String]) async throws -> EditHistory
     /// Sets the playlist's full track order.
     func reorderPlaylist(playlistID: String, trackIDs: [String]) async throws
+
+    // MARK: Phase 4b: metadata, Tag List, history, collection, import, missing files.
+
+    /// Stars 0 to 5 on every track, one undo step. More than 5 throws `Malformed`.
+    func setTrackRating(ids: [String], stars: UInt8) async throws -> EditHistory
+    func setTrackComment(ids: [String], comment: String) async throws -> EditHistory
+    /// Colour 1 to 8, or 0 for none. Anything else throws `Malformed`.
+    func setTrackColor(ids: [String], color: UInt8) async throws -> EditHistory
+    /// An Info-tab field. `.bpm` takes one track and is not undoable.
+    func setTrackField(ids: [String], field: TrackField, value: String) async throws -> EditHistory
+    func addToTagList(ids: [String]) async throws -> UInt32
+    func removeFromTagList(ids: [String]) async throws -> UInt32
+    func reloadTags(ids: [String]) async throws -> UInt32
+    func resetPlayCount(ids: [String]) async throws -> EditHistory
+    func removeFromHistory(historyID: String, ids: [String]) async throws -> UInt32
+    /// Permanent; the undo history is cleared. The files stay on disk.
+    func removeFromCollection(ids: [String]) async throws -> UInt32
+    /// Imports files and folders. Raises `.importProgress` events while it runs.
+    func importFiles(paths: [String]) async throws -> ImportReport
+    func importXML(path: String) async throws -> XmlImportReport
+    func missingTracks(limit: UInt32) async throws -> MissingTracks
+    func findDuplicates(limit: UInt32) async throws -> Duplicates
+    func relocateTrack(id: String, path: String) async throws -> UInt32
+    func autoRelocate(folders: [String]) async throws -> RelocateReport
 }
 
 /// Forwards the Rust core's callbacks into an `AsyncStream`.
@@ -189,6 +213,53 @@ actor Backend: BackendProtocol {
     }
     func reorderPlaylist(playlistID: String, trackIDs: [String]) async throws {
         try core.reorderPlaylist(playlistId: playlistID, trackIds: trackIDs)
+    }
+
+    func setTrackRating(ids: [String], stars: UInt8) async throws -> EditHistory {
+        try core.setTrackRating(trackIds: ids, stars: stars)
+    }
+    func setTrackComment(ids: [String], comment: String) async throws -> EditHistory {
+        try core.setTrackComment(trackIds: ids, comment: comment)
+    }
+    func setTrackColor(ids: [String], color: UInt8) async throws -> EditHistory {
+        try core.setTrackColor(trackIds: ids, color: color)
+    }
+    func setTrackField(ids: [String], field: TrackField, value: String) async throws -> EditHistory {
+        try core.setTrackField(trackIds: ids, field: field, value: value)
+    }
+    func addToTagList(ids: [String]) async throws -> UInt32 { try core.addToTagList(trackIds: ids) }
+    func removeFromTagList(ids: [String]) async throws -> UInt32 { try core.removeFromTagList(trackIds: ids) }
+    func reloadTags(ids: [String]) async throws -> UInt32 { try core.reloadTags(trackIds: ids) }
+    func resetPlayCount(ids: [String]) async throws -> EditHistory { try core.resetPlayCount(trackIds: ids) }
+    func removeFromHistory(historyID: String, ids: [String]) async throws -> UInt32 {
+        try core.removeFromHistory(historyId: historyID, trackIds: ids)
+    }
+    func removeFromCollection(ids: [String]) async throws -> UInt32 { try core.removeFromCollection(trackIds: ids) }
+
+    // Imports and the relocate walk can run for a while. They leave the actor so row fetches,
+    // waveforms and the other reads are not queued behind them.
+    func importFiles(paths: [String]) async throws -> ImportReport {
+        let core = core
+        return try await Task.detached { try core.importFiles(paths: paths) }.value
+    }
+    func importXML(path: String) async throws -> XmlImportReport {
+        let core = core
+        return try await Task.detached { try core.importXml(path: path) }.value
+    }
+    func missingTracks(limit: UInt32) async throws -> MissingTracks {
+        let core = core
+        return try await Task.detached { try core.missingTracks(limit: limit) }.value
+    }
+    func findDuplicates(limit: UInt32) async throws -> Duplicates {
+        let core = core
+        return try await Task.detached { try core.findDuplicates(limit: limit) }.value
+    }
+    func relocateTrack(id: String, path: String) async throws -> UInt32 {
+        try core.relocateTrack(trackId: id, path: path)
+    }
+    func autoRelocate(folders: [String]) async throws -> RelocateReport {
+        let core = core
+        return try await Task.detached { try core.autoRelocate(folders: folders) }.value
     }
 }
 

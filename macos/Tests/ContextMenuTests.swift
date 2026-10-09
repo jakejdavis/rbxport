@@ -17,7 +17,7 @@ struct ContextMenuTests {
         #expect(
             titles(rows) == [
                 "Load", "Import To Collection", "Analyze Track", "Analysis Lock", "Add To Playlist", "Add To Tag List",
-                "Reload Tag", "Get Info from iTunes", "Track Type", "Export Track", "Auto Load Hot Cue",
+                "Reload Tag", "Color", "Get Info from iTunes", "Track Type", "Export Track", "Auto Load Hot Cue",
                 "Reset DJ Play Count", "Add New Analysis Data", "Convert Memory Cues to Hot Cues",
                 "Remove from Playlist", "Remove from Collection", "Remove from History", "Show information",
                 "Show in Finder", "Track information",

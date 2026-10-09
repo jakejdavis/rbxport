@@ -46,6 +46,10 @@ final class InfoPanelModel {
     }
     /// The panel is open; nothing is fetched while it is closed.
     private(set) var isActive = false
+    /// The write gate is open, so the Info tab shows editors instead of values.
+    var editable = false
+    /// Performs an edit on the track (the app model supplies it); true when it was written.
+    @ObservationIgnored var onEdit: (InfoEdit, String) async -> Bool = { _, _ in false }
 
     /// Record fetches issued, for tests.
     private(set) var detailFetches = 0
@@ -180,6 +184,16 @@ final class InfoPanelModel {
         }
     }
 
+    /// An edit made in the Info tab, on the panel's single subject. The record is re-read when
+    /// the library changes; a refusal leaves the editors showing what is stored.
+    @discardableResult
+    func edit(_ change: InfoEdit) async -> Bool {
+        guard case .track(let id) = subject else { return false }
+        let done = await onEdit(change, id)
+        if !done, isActive { reload(clearing: false) }
+        return done
+    }
+
     /// Waits for the record fetch in flight. For tests.
     func settle() async {
         await detailTask?.value
@@ -300,20 +314,24 @@ struct InfoTabView: View {
 
     var body: some View {
         if let details = model.details {
-            Form {
-                ForEach(InfoFormat.infoSections(details, myTagNames: model.myTagNames), id: \.title) { section in
-                    Section(section.title) {
-                        ForEach(section.facts, id: \.label) { fact in
-                            LabeledContent(fact.label) {
-                                Text(fact.value.isEmpty ? "\u{2014}" : fact.value)
-                                    .foregroundStyle(fact.value.isEmpty ? .tertiary : .primary)
-                                    .textSelection(.enabled).multilineTextAlignment(.trailing)
+            if model.editable {
+                InfoEditForm(model: model, details: details).id(details.id)
+            } else {
+                Form {
+                    ForEach(InfoFormat.infoSections(details, myTagNames: model.myTagNames), id: \.title) { section in
+                        Section(section.title) {
+                            ForEach(section.facts, id: \.label) { fact in
+                                LabeledContent(fact.label) {
+                                    Text(fact.value.isEmpty ? "\u{2014}" : fact.value)
+                                        .foregroundStyle(fact.value.isEmpty ? .tertiary : .primary)
+                                        .textSelection(.enabled).multilineTextAlignment(.trailing)
+                                }
                             }
                         }
                     }
                 }
+                .formStyle(.grouped)
             }
-            .formStyle(.grouped)
         } else {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         }

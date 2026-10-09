@@ -56,6 +56,16 @@ struct RbxportApp: App {
                 Button("New Intelligent Playlist") { model.newSmartPlaylist(near: model.selectedSidebarNode) }
                     .disabled(!model.canEdit)
             }
+            CommandGroup(after: .importExport) {
+                Menu("Import") {
+                    Button("Track\u{2026}") { Task { await model.importFromPanel(folders: false) } }
+                    Button("Folder\u{2026}") { Task { await model.importFromPanel(folders: true) } }
+                    Button("rekordbox XML\u{2026}") { Task { await model.importXMLFromPanel() } }
+                }
+                .disabled(!model.canEdit)
+                Button("Missing File Manager\u{2026}") { model.openMissingFiles() }
+                Button("Find Duplicates\u{2026}") { model.openDuplicates() }
+            }
             CommandGroup(after: .textEditing) {
                 Button("Find") { model.focusSearch() }.keyboardShortcut("f", modifiers: .command)
             }

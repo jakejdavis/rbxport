@@ -263,28 +263,45 @@ pub fn commit_full<T, F>(state: &AppState, sink: &dyn EventSink, touched: Touche
 where
     F: FnOnce(&mut rbl_db::write::Writer) -> Result<(T, Record), rbl_db::DbError>,
 {
+    commit_maybe(state, sink, touched, |w| action(w).map(|(value, record)| (value, record, true)))
+}
+
+/// [`commit_full`] for an edit that may turn out to change nothing (an import
+/// of files already in the library). When `action` reports `false` the index is
+/// not re-read, the history is untouched and no event is emitted.
+pub fn commit_maybe<T, F>(state: &AppState, sink: &dyn EventSink, touched: Touched, action: F) -> AppResult<Committed<T>>
+where
+    F: FnOnce(&mut rbl_db::write::Writer) -> Result<(T, Record, bool), rbl_db::DbError>,
+{
     check_gate(state)?;
     let announce = touched.clone();
-    let (value, history) = {
+    let (value, changed, history) = {
         let _gate = state.edit_gate.lock();
-        let (generation, (value, record)) = state
-            .write_then(action, |db, out| refresh_after_edit(state, db, touched).map(|g| (g, out)))
+        let (generation, (value, record, changed)) = state
+            .write_then(action, |db, out| {
+                let generation = if out.2 { refresh_after_edit(state, db, touched)? } else { state.summary().3 };
+                Ok((generation, out))
+            })
             .map_err(|e| map_error(state, e))?;
         let mut history = state.edit_history.lock();
-        match record {
-            Record::Nothing => history.clear_redo(),
-            Record::Permanent => history.clear(),
-            Record::Entry(edit, label) => {
-                if !edit.is_empty() {
-                    history.record(edit, label);
+        if changed {
+            match record {
+                Record::Nothing => history.clear_redo(),
+                Record::Permanent => history.clear(),
+                Record::Entry(edit, label) => {
+                    if !edit.is_empty() {
+                        history.record(edit, label);
+                    }
                 }
             }
         }
-        (value, (generation, history_dto(generation, &history)))
+        (value, changed, (generation, history_dto(generation, &history)))
     };
     let (generation, dto) = history;
-    sink.emit(announce.changed(generation));
-    sink.emit(AppEvent::EditHistoryChanged(dto.clone()));
+    if changed {
+        sink.emit(announce.changed(generation));
+        sink.emit(AppEvent::EditHistoryChanged(dto.clone()));
+    }
     Ok(Committed { value, history: dto })
 }
 

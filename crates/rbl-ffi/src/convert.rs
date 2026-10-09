@@ -12,7 +12,8 @@ use crate::types::{
     BpmFilter, CountedBpm, CountedKey, Device, DeviceExport, EditHistory, ExplorerChildren, ExplorerRoot, FilterValues,
     TagCategory, TrackFilter, ExtraColumn, ExtraFields, HotCue, LibraryProblem, LibrarySummary, LoadOutcome, NodeKind, Row, SearchField, SortKey,
     TrackSource, TreeNode, ViewHandle, ViewSpec, TrackDetails, TrackLookups, MyTag, MyTagCategory,
-    ImportProgress, SmartCondition, SmartLogic, SmartRule,
+    ImportProgress, SmartCondition, SmartLogic, SmartRule, DuplicateGroup, DuplicateTrack, Duplicates, ImportReport,
+    ImportedTrack, MissingTrack, MissingTracks, RelocateReport, XmlImportReport,
 };
 
 impl SortKey {
@@ -309,6 +310,73 @@ impl From<LibraryProblemDto> for LibraryProblem {
             LibraryProblemDto::Missing { master_db } => Self::Missing { master_db },
             LibraryProblemDto::Failed { message } => Self::Failed { message },
         }
+    }
+}
+
+impl From<rbl_app::dto::ImportedTrackDto> for ImportedTrack {
+    fn from(t: rbl_app::dto::ImportedTrackDto) -> Self {
+        Self { id: t.id, title: t.title }
+    }
+}
+
+impl From<rbl_app::dto::ImportReportDto> for ImportReport {
+    fn from(r: rbl_app::dto::ImportReportDto) -> Self {
+        Self {
+            imported: r.imported,
+            skipped: r.skipped,
+            tracks: r.tracks.into_iter().map(Into::into).collect(),
+            existing: r.existing.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<rbl_app::dto::XmlImportReportDto> for XmlImportReport {
+    fn from(r: rbl_app::dto::XmlImportReportDto) -> Self {
+        Self {
+            imported: r.imported,
+            existing: r.existing,
+            skipped: r.skipped,
+            playlists: r.playlists,
+            cues: r.cues,
+            tracks: r.tracks.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<rbl_app::dto::MissingTracksDto> for MissingTracks {
+    fn from(m: rbl_app::dto::MissingTracksDto) -> Self {
+        Self {
+            total: m.total,
+            tracks: m.tracks.into_iter().map(|t| MissingTrack { id: t.id, title: t.title, artist: t.artist, path: t.path }).collect(),
+        }
+    }
+}
+
+impl From<rbl_app::dto::DuplicatesDto> for Duplicates {
+    fn from(d: rbl_app::dto::DuplicatesDto) -> Self {
+        Self {
+            groups: d.groups,
+            extra: d.extra,
+            shown: d
+                .shown
+                .into_iter()
+                .map(|g| DuplicateGroup {
+                    title: g.title,
+                    artist: g.artist,
+                    tracks: g
+                        .tracks
+                        .into_iter()
+                        .map(|t| DuplicateTrack { id: t.id, path: t.path, duration_sec: t.duration_sec, present: t.present })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+}
+
+impl From<rbl_app::maintenance::RelocateReportDto> for RelocateReport {
+    fn from(r: rbl_app::maintenance::RelocateReportDto) -> Self {
+        Self { relocated: r.relocated, unresolved: r.unresolved }
     }
 }
 

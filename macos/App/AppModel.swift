@@ -45,7 +45,9 @@ final class AppModel {
     let layoutStore: ColumnLayoutStore
 
     private(set) var phase: Phase = .loading
-    var summary: LibrarySummary?
+    var summary: LibrarySummary? {
+        didSet { info.editable = canEdit }
+    }
     let sidebar: SidebarModel
     private(set) var opened: OpenedView?
     private(set) var viewError: String?
@@ -56,6 +58,14 @@ final class AppModel {
     var editHistory = EditHistory(generation: 0, canUndo: false, canRedo: false, undoLabel: nil, redoLabel: nil)
     /// The open smart-playlist editor sheet, if any.
     var smartEditor: SmartEditorModel?
+    /// The open Missing Files and Find Duplicates sheets, if any.
+    var missingFiles: MissingFilesModel?
+    var duplicates: DuplicatesModel?
+    /// Panels and alerts; tests replace them.
+    var dialogs = Dialogs.live
+    /// An import is running (the status bar shows `importProgress`).
+    @ObservationIgnored var importInFlight = false
+    var importProgress: ImportProgressState?
     /// Library Protection (Settings > General). On by default, as in the React app. Persisted;
     /// pushed to the core, whose write gate is the single authority.
     var protectLibrary: Bool {
@@ -195,6 +205,7 @@ final class AppModel {
         waveformPalette = defaults.string(forKey: "waveformPalette").flatMap(WaveformPalette.init) ?? .bands
         player = PlayerModel(backend: backend, waveforms: waveforms, artwork: artwork, defaults: defaults)
         info.setActive(infoPanelOpen)
+        info.onEdit = { [weak self] edit, id in await self?.applyInfoEdit(edit, to: id) ?? false }
         onLoadToDeck = { [weak self] id, deck in
             guard let self else { return }
             self.player.load(trackID: id, row: self.loadedRow(id: id), into: deck)
@@ -252,7 +263,11 @@ final class AppModel {
             }
         case .editHistoryChanged(let history):
             editHistory = history
-        case .tagListChanged, .cuesChanged, .gridChanged, .analysisChanged, .devicesChanged, .importProgress:
+        case .tagListChanged:
+            await tagListChanged()
+        case .importProgress(let progress):
+            importProgressed(progress)
+        case .cuesChanged, .gridChanged, .analysisChanged, .devicesChanged:
             break
         }
     }
@@ -545,7 +560,9 @@ final class AppModel {
         ContextMenus.TrackContext(
             selectionCount: selectedIDs.count, inTagList: selectedNodeID == "tag",
             inExplorer: selectedNodeID?.hasPrefix("ex:") ?? false, editable: canEdit,
-            playlists: sidebar.playlistTargets(), inPlaylist: openPlaylistID != nil)
+            playlists: sidebar.playlistTargets(), inPlaylist: openPlaylistID != nil,
+            inHistory: openHistoryID != nil, hasLoose: selectedIDs.contains(where: Self.isLoose),
+            allLoose: !selectedIDs.isEmpty && selectedIDs.allSatisfy(Self.isLoose))
     }
 
     /// Runs a live entry of the track menu on the selection.
@@ -559,6 +576,16 @@ final class AppModel {
             if let id = selectedIDs.first, selectedIDs.count == 1 { player.load(trackID: id, row: loadedRow(id: id), into: deck) }
         case .addToPlaylist(let id): Task { await addSelectionToPlaylist(id) }
         case .removeFromPlaylist: Task { await removeSelectionFromPlaylist() }
+        case .addToTagList: Task { await addSelectionToTagList() }
+        case .removeFromTagList: Task { await removeSelectionFromTagList() }
+        case .reloadTag: Task { await reloadSelectionTags() }
+        case .resetPlayCount: Task { await resetSelectionPlayCount() }
+        case .removeFromCollection: Task { await removeSelectionFromCollection() }
+        case .removeFromHistory: Task { await removeSelectionFromHistory() }
+        case .importToCollection: Task { await importSelectionToCollection() }
+        case .setColor(let color):
+            let ids = orderedSelection
+            Task { await setColor(color, ids: ids) }
         case .exportPlaylist, .createPlaylist, .createFolder, .createSmartPlaylist, .editSmartPlaylist, .rename, .delete,
             .sortItems:
             break

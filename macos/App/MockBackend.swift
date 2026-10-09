@@ -16,12 +16,35 @@ actor MockBackend: BackendProtocol {
     private var generation: UInt32 = 1
 
     // Editing state. The mock keeps the playlist tree and memberships and undoes by snapshot.
+    /// What a metadata edit changed on a track (the mock's stand-in for the database row).
+    struct Meta: Equatable {
+        var rating: UInt8?
+        var comment: String?
+        var color: UInt8?
+        var fields: [String: String] = [:]
+    }
     fileprivate struct Snapshot {
         var label: String
         var nodes: [TreeNode]
         var memberships: [String: [String]]
         var smartRules: [String: SmartRule]
+        var meta: [String: Meta] = [:]
+        var tagList: [String] = []
     }
+    fileprivate(set) var meta: [String: Meta] = [:]
+    fileprivate(set) var tagList: [String] = []
+    fileprivate(set) var removedTracks: Set<String> = []
+    /// What the import calls answer, set by tests. The mock emits one progress event per `progressTitles`.
+    var importAnswer = ImportReport(imported: 0, skipped: [], tracks: [], existing: [])
+    var xmlAnswer = XmlImportReport(imported: 0, existing: 0, skipped: [], playlists: 0, cues: 0, tracks: [])
+    var progressTitles: [String] = []
+    private(set) var importedPaths: [[String]] = []
+    /// The missing tracks the mock lists; `relocateTrack` removes one.
+    var missingList: [MissingTrack] = []
+    var duplicateGroups: [DuplicateGroup] = []
+    var autoRelocateAnswer = RelocateReport(relocated: 0, unresolved: 0)
+    private(set) var autoRelocateFolders: [[String]] = []
+    private(set) var relocations: [(id: String, path: String)] = []
     private var gateProtected = true
     private var gateRunning = false
     private var undoStack: [Snapshot] = []
@@ -134,6 +157,10 @@ actor MockBackend: BackendProtocol {
         if case .playlist(let id) = spec.source, let members = memberships[id] {
             order = members.compactMap { Int($0).map { $0 - 1 } }.filter { $0 >= 0 && $0 < trackCount }
         }
+        if case .tagList = spec.source {
+            order = tagList.compactMap { Int($0).map { $0 - 1 } }.filter { $0 >= 0 && $0 < trackCount }
+        }
+        order.removeAll { removedTracks.contains(String($0 + 1)) }
         if !spec.query.isEmpty {
             order = order.filter { Self.title($0).localizedCaseInsensitiveContains(spec.query) }
         }
@@ -153,7 +180,7 @@ actor MockBackend: BackendProtocol {
         }
         let start = min(Int(offset), view.titles.count)
         let end = min(start + Int(len), view.titles.count)
-        return (start..<end).map { Self.row(track: view.titles[$0], position: $0 + 1, extra: extraColumns) }
+        return (start..<end).map { applyMeta(Self.row(track: view.titles[$0], position: $0 + 1, extra: extraColumns)) }
     }
 
     func viewIDsInRange(viewID: UInt32, from: UInt32, to: UInt32) async throws -> [String] {
@@ -211,10 +238,10 @@ actor MockBackend: BackendProtocol {
         detailCalls.append(id)
         if let delay = detailDelays[id] { try? await Task.sleep(for: delay) }
         if let override = detailOverrides[id] { return override }
-        guard let n = Int(id), n >= 1, n <= trackCount else {
+        guard let n = Int(id), n >= 1, n <= trackCount, !removedTracks.contains(id) else {
             throw FfiError.NotFound(message: "That track is no longer in the library.", detail: nil)
         }
-        return Self.details(track: n - 1)
+        return applyMeta(Self.details(track: n - 1))
     }
 
     func trackLookups() async throws -> TrackLookups {
@@ -331,17 +358,21 @@ extension MockBackend {
     }
 
     fileprivate func snapshot(_ label: String) -> Snapshot {
-        Snapshot(label: label, nodes: nodes, memberships: memberships, smartRules: smartRules)
+        Snapshot(label: label, nodes: nodes, memberships: memberships, smartRules: smartRules, meta: meta, tagList: tagList)
     }
 
     fileprivate func restore(_ s: Snapshot) {
         nodes = s.nodes
         memberships = s.memberships
         smartRules = s.smartRules
+        meta = s.meta
+        tagList = s.tagList
     }
 
     /// Runs one edit through the gate. `label` makes it undoable; nil edits only clear the redo branch.
-    fileprivate func edit<T>(_ log: String, label: String?, _ body: () throws -> T) throws -> T {
+    fileprivate func edit<T>(
+        _ log: String, label: String?, tagListOnly: Bool = false, permanent: Bool = false, _ body: () throws -> T
+    ) throws -> T {
         editLog.append(log)
         if gateProtected { throw FfiError.ReadOnly(message: Self.protectedMessage, detail: nil) }
         if gateRunning { throw FfiError.ReadOnly(message: Self.runningMessage, detail: nil) }
@@ -353,14 +384,15 @@ extension MockBackend {
         let result = try body()
         if label != nil { undoStack.append(before) }
         redoStack.removeAll()
-        publish()
+        if permanent { undoStack.removeAll() }
+        publish(tagListOnly: tagListOnly)
         return result
     }
 
-    fileprivate func publish() {
+    fileprivate func publish(tagListOnly: Bool = false) {
         generation += 1
         views.removeAll()
-        continuation.yield(.libraryChanged(generation: generation))
+        continuation.yield(tagListOnly ? .tagListChanged(generation: generation) : .libraryChanged(generation: generation))
         continuation.yield(.editHistoryChanged(history: historyValue()))
     }
 
@@ -554,6 +586,209 @@ extension MockBackend {
             let old = memberships[playlistID] ?? []
             let kept = trackIDs.filter { old.contains($0) }
             memberships[playlistID] = kept + old.filter { !kept.contains($0) }
+        }
+    }
+}
+
+
+// MARK: - Phase 4b
+
+extension MockBackend {
+    static let ratingRange = "is not a rating between 0 and 5"
+
+    fileprivate func applyMeta(_ row: Row) -> Row {
+        guard let m = meta[row.id] else { return row }
+        var row = row
+        if let rating = m.rating { row.rating = rating }
+        if let comment = m.comment { row.comment = comment }
+        if let value = m.fields["title"] { row.title = value }
+        if let value = m.fields["artist"] { row.artist = value }
+        if let value = m.fields["album"] { row.album = value }
+        if let value = m.fields["genre"] { row.genre = value }
+        if let value = m.fields["label"] { row.label = value }
+        if let value = m.fields["bpm"], let bpm = Double(value) { row.bpmX100 = UInt32(bpm * 100) }
+        if let color = m.color { row.extra.color = color }
+        return row
+    }
+
+    fileprivate func applyMeta(_ details: TrackDetails) -> TrackDetails {
+        guard let m = meta[details.id] else { return details }
+        var d = details
+        if let rating = m.rating { d.rating = rating }
+        if let comment = m.comment { d.comment = comment }
+        if let color = m.color { d.color = color == 0 ? "" : String(color) }
+        if let value = m.fields["title"] { d.title = value }
+        if let value = m.fields["artist"] { d.artist = value }
+        if let value = m.fields["album"] { d.album = value }
+        if let value = m.fields["genre"] { d.genre = value }
+        if let value = m.fields["label"] { d.label = value }
+        if let value = m.fields["year"] { d.year = UInt32(value) ?? d.year }
+        if let value = m.fields["bpm"], let bpm = Double(value) { d.bpmX100 = UInt32(bpm * 100) }
+        return d
+    }
+
+    private func requireCollection(_ ids: [String]) throws {
+        if ids.contains(where: { $0.hasPrefix("file:") }) {
+            throw FfiError.Malformed(message: "That file is not in the collection. Import it first.", detail: nil)
+        }
+    }
+
+    func setTrackRating(ids: [String], stars: UInt8) async throws -> EditHistory {
+        try edit("setTrackRating(\(ids.joined(separator: ",")),\(stars))", label: "Track Edit") {
+            try requireCollection(ids)
+            if stars > 5 { throw FfiError.Malformed(message: "\(stars) \(Self.ratingRange)", detail: nil) }
+            for id in ids { meta[id, default: Meta()].rating = stars }
+            return historyValue()
+        }
+    }
+
+    func setTrackComment(ids: [String], comment: String) async throws -> EditHistory {
+        try edit("setTrackComment(\(ids.joined(separator: ",")),\(comment))", label: "Track Edit") {
+            try requireCollection(ids)
+            for id in ids { meta[id, default: Meta()].comment = comment }
+            return historyValue()
+        }
+    }
+
+    func setTrackColor(ids: [String], color: UInt8) async throws -> EditHistory {
+        try edit("setTrackColor(\(ids.joined(separator: ",")),\(color))", label: "Track Edit") {
+            try requireCollection(ids)
+            if color > 8 { throw FfiError.Malformed(message: "\(color) is not a colour from 0 to 8.", detail: nil) }
+            for id in ids { meta[id, default: Meta()].color = color }
+            return historyValue()
+        }
+    }
+
+    func setTrackField(ids: [String], field: TrackField, value: String) async throws -> EditHistory {
+        let name = "\(field)"
+        let isBpm = field == .bpm
+        return try edit("setTrackField(\(ids.joined(separator: ",")),\(name),\(value))", label: isBpm ? nil : "Track Edit") {
+            try requireCollection(ids)
+            if isBpm {
+                guard ids.count == 1 else {
+                    throw FfiError.Malformed(message: "Select a single track to change its BPM.", detail: nil)
+                }
+                guard let bpm = Double(value.trimmingCharacters(in: .whitespaces)), (40.0...499.0).contains(bpm) else {
+                    throw FfiError.Malformed(message: "Enter a BPM from 40 to 499.", detail: nil)
+                }
+            }
+            for id in ids { meta[id, default: Meta()].fields[name] = value }
+            return historyValue()
+        }
+    }
+
+    func addToTagList(ids: [String]) async throws -> UInt32 {
+        try edit("addToTagList(\(ids.joined(separator: ",")))", label: nil, tagListOnly: true) {
+            try requireCollection(ids)
+            var added: UInt32 = 0
+            for id in ids where !tagList.contains(id) {
+                tagList.append(id)
+                added += 1
+            }
+            return generation
+        }
+    }
+
+    func removeFromTagList(ids: [String]) async throws -> UInt32 {
+        try edit("removeFromTagList(\(ids.joined(separator: ",")))", label: nil, tagListOnly: true) {
+            tagList.removeAll { ids.contains($0) }
+            return generation
+        }
+    }
+
+    func reloadTags(ids: [String]) async throws -> UInt32 {
+        try edit("reloadTags(\(ids.joined(separator: ",")))", label: nil) {
+            try requireCollection(ids)
+            return generation
+        }
+    }
+
+    func resetPlayCount(ids: [String]) async throws -> EditHistory {
+        try edit("resetPlayCount(\(ids.joined(separator: ",")))", label: "Track Edit") {
+            try requireCollection(ids)
+            for id in ids { meta[id, default: Meta()].fields["playCount"] = "0" }
+            return historyValue()
+        }
+    }
+
+    func removeFromHistory(historyID: String, ids: [String]) async throws -> UInt32 {
+        try edit("removeFromHistory(\(historyID),\(ids.joined(separator: ",")))", label: nil) { generation }
+    }
+
+    func removeFromCollection(ids: [String]) async throws -> UInt32 {
+        try edit("removeFromCollection(\(ids.joined(separator: ",")))", label: nil, permanent: true) {
+            try requireCollection(ids)
+            removedTracks.formUnion(ids)
+            tagList.removeAll { ids.contains($0) }
+            for key in memberships.keys { memberships[key]?.removeAll { ids.contains($0) } }
+            for group in duplicateGroups.indices {
+                duplicateGroups[group].tracks.removeAll { ids.contains($0.id) }
+            }
+            duplicateGroups.removeAll { $0.tracks.count < 2 }
+            return generation
+        }
+    }
+
+    func importFiles(paths: [String]) async throws -> ImportReport {
+        importedPaths.append(paths)
+        let report = try edit("importFiles(\(paths.joined(separator: ",")))", label: nil) { () -> ImportReport in
+            for (index, title) in progressTitles.enumerated() {
+                continuation.yield(
+                    .importProgress(
+                        progress: ImportProgress(
+                            path: paths.first ?? "", state: "writing", done: UInt32(index + 1),
+                            total: UInt32(progressTitles.count), title: title)))
+            }
+            trackCount += Int(importAnswer.imported)
+            return importAnswer
+        }
+        return report
+    }
+
+    func importXML(path: String) async throws -> XmlImportReport {
+        importedPaths.append([path])
+        return try edit("importXML(\(path))", label: nil) {
+            trackCount += Int(xmlAnswer.imported)
+            return xmlAnswer
+        }
+    }
+
+    var latestViewID: UInt32 { nextViewID - 1 }
+
+    // Test controls for the import and relocate answers.
+    func setImport(_ report: ImportReport, titles: [String] = []) {
+        importAnswer = report
+        progressTitles = titles
+    }
+    func setXML(_ report: XmlImportReport) { xmlAnswer = report }
+    func setMissing(_ list: [MissingTrack]) { missingList = list }
+    func setDuplicates(_ groups: [DuplicateGroup]) { duplicateGroups = groups }
+    func setAutoRelocate(_ report: RelocateReport) { autoRelocateAnswer = report }
+
+    func missingTracks(limit: UInt32) async throws -> MissingTracks {
+        MissingTracks(total: UInt32(missingList.count), tracks: Array(missingList.prefix(Int(limit))))
+    }
+
+    func findDuplicates(limit: UInt32) async throws -> Duplicates {
+        let extra = duplicateGroups.reduce(0) { $0 + $1.tracks.count - 1 }
+        return Duplicates(
+            groups: UInt32(duplicateGroups.count), extra: UInt32(extra), shown: Array(duplicateGroups.prefix(Int(limit))))
+    }
+
+    func relocateTrack(id: String, path: String) async throws -> UInt32 {
+        try edit("relocateTrack(\(id),\(path))", label: nil) {
+            relocations.append((id, path))
+            missingList.removeAll { $0.id == id }
+            return generation
+        }
+    }
+
+    func autoRelocate(folders: [String]) async throws -> RelocateReport {
+        autoRelocateFolders.append(folders)
+        return try edit("autoRelocate(\(folders.joined(separator: ",")))", label: nil) {
+            let answer = autoRelocateAnswer
+            missingList.removeFirst(min(Int(answer.relocated), missingList.count))
+            return answer
         }
     }
 }
