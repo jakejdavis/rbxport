@@ -1,14 +1,10 @@
-node_modules/
 .wrangler/
 dist/
 macos/dist/
 target/
 .DS_Store
 *.log
-.env.sentry
 
-# Tauri
-src-tauri/gen/
 
 # Private research and captured reference material. Never commit these.
 .agents/

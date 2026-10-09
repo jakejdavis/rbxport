@@ -5,6 +5,7 @@ on:
   push:
     paths:
       - "macos/**"
+      - "public/locales/**"
       - "crates/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -12,6 +13,7 @@ on:
   pull_request:
     paths:
       - "macos/**"
+      - "public/locales/**"
       - "crates/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -39,6 +41,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
+
+      - name: Catalog script tests
+        run: node --test macos/scripts/build-xcstrings.test.mjs
 
       - name: Install XcodeGen
         run: brew install xcodegen
