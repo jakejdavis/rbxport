@@ -20,3 +20,14 @@ func isolatedStore() -> ColumnLayoutStore {
     defaults.removePersistentDomain(forName: suite)
     return ColumnLayoutStore(defaults: defaults)
 }
+
+/// `eventually` for conditions that ask an actor (a mock backend's call log).
+@MainActor
+func eventually(timeout: Duration = .seconds(5), _ condition: @MainActor () async -> Bool) async -> Bool {
+    let deadline = ContinuousClock.now + timeout
+    while ContinuousClock.now < deadline {
+        if await condition() { return true }
+        try? await Task.sleep(for: .milliseconds(10))
+    }
+    return await condition()
+}

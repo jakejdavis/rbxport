@@ -1,0 +1,4 @@
+# One deployment target for every cargo invocation, so plain `cargo test` and
+# macos/scripts/build-rust.sh share C build artefacts instead of rebuilding them.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "15.0"

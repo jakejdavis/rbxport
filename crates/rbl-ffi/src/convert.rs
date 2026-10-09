@@ -1,7 +1,7 @@
 //! Mechanical conversions between the core's DTOs and the bridge's types.
 
 use rbl_app::dto::{
-    EditHistoryDto, LibraryProblemDto, LibrarySummaryDto, RowDto, TrackSourceDto, TreeNodeDto,
+    DeviceDto, EditHistoryDto, ExplorerChildrenDto, ExplorerRootDto, FilterValuesDto, LibraryProblemDto, LibrarySummaryDto, RowDto, TrackSourceDto, TreeNodeDto,
     ViewHandleDto, ViewSpecDto,
 };
 use rbl_app::startup::LoadOutcome as CoreOutcome;
@@ -9,7 +9,8 @@ use rbl_app::AppEvent;
 
 use crate::events::LibraryEvent;
 use crate::types::{
-    EditHistory, ExtraColumn, ExtraFields, HotCue, LibraryProblem, LibrarySummary, LoadOutcome, NodeKind, Row, SearchField, SortKey,
+    BpmFilter, CountedBpm, CountedKey, Device, DeviceExport, EditHistory, ExplorerChildren, ExplorerRoot, FilterValues,
+    TagCategory, TrackFilter, ExtraColumn, ExtraFields, HotCue, LibraryProblem, LibrarySummary, LoadOutcome, NodeKind, Row, SearchField, SortKey,
     TrackSource, TreeNode, ViewHandle, ViewSpec,
 };
 
@@ -161,7 +162,64 @@ impl From<ViewSpec> for ViewSpecDto {
             descending: spec.descending,
             query: spec.query,
             search_field: spec.search_field.into(),
-            filter: rbl_app::dto::TrackFilterDto::default(),
+            filter: spec.filter.into(),
+        }
+    }
+}
+
+impl From<TrackFilter> for rbl_app::dto::TrackFilterDto {
+    fn from(f: TrackFilter) -> Self {
+        Self {
+            bpm: f.bpm.map(|b: BpmFilter| rbl_app::dto::BpmFilterDto {
+                values: b.values,
+                tolerance_pct: b.tolerance_pct,
+                master_bpm_x100: b.master_bpm_x100,
+            }),
+            keys: f.keys,
+            ratings: f.ratings,
+            colors: f.colors,
+        }
+    }
+}
+
+impl From<FilterValuesDto> for FilterValues {
+    fn from(v: FilterValuesDto) -> Self {
+        Self {
+            bpms: v.bpms.into_iter().map(|c| CountedBpm { value: c.value, count: c.count }).collect(),
+            keys: v.keys.into_iter().map(|c| CountedKey { value: c.value, count: c.count }).collect(),
+            tags: v.tags.into_iter().map(|c| TagCategory { name: c.name, tags: c.tags }).collect(),
+        }
+    }
+}
+
+impl From<ExplorerRootDto> for ExplorerRoot {
+    fn from(r: ExplorerRootDto) -> Self {
+        Self { name: r.name, path: r.path }
+    }
+}
+
+impl From<ExplorerChildrenDto> for ExplorerChildren {
+    fn from(c: ExplorerChildrenDto) -> Self {
+        Self { names: c.names, total: c.total }
+    }
+}
+
+impl From<DeviceDto> for Device {
+    fn from(d: DeviceDto) -> Self {
+        Self {
+            name: d.name,
+            path: d.path,
+            total_bytes: d.total_bytes,
+            free_bytes: d.free_bytes,
+            file_system: d.file_system,
+            removable: d.removable,
+            volume_id: d.volume_id,
+            export: d.export.map(|e| DeviceExport {
+                tracks: e.tracks,
+                playlists: e.playlists,
+                ours: e.ours,
+                written: e.written,
+            }),
         }
     }
 }
@@ -178,8 +236,11 @@ impl From<LibrarySummaryDto> for LibrarySummary {
     }
 }
 
-fn node_kind(kind: &str) -> NodeKind {
+fn node_kind(kind: &str, is_folder: bool) -> NodeKind {
     match kind {
+        // A year or month folder and a session share the wire kind; only a
+        // folder carries an expanded flag.
+        "history" if is_folder => NodeKind::HistoryFolder,
         "allTracks" => NodeKind::AllTracks,
         "collection" => NodeKind::Collection,
         "histories" => NodeKind::Histories,
@@ -195,7 +256,7 @@ impl From<TreeNodeDto> for TreeNode {
         Self {
             id: n.id,
             name: n.name,
-            kind: node_kind(n.kind),
+            kind: node_kind(n.kind, n.expanded.is_some()),
             depth: n.depth,
             expanded: n.expanded,
             child_count: n.child_count,

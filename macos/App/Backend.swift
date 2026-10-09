@@ -14,6 +14,16 @@ protocol BackendProtocol: Sendable {
     func fetchRows(viewID: UInt32, offset: UInt32, len: UInt32, extraColumns: [ExtraColumn]) async throws -> [Row]
     /// Track ids at positions `from...to` (inclusive) of a view, in view order.
     func viewIDsInRange(viewID: UInt32, from: UInt32, to: UInt32) async throws -> [String]
+    /// The BPMs and keys the filter bar offers for the spec's source and query (its own filter is ignored).
+    func filterValues(_ spec: ViewSpec) async throws -> FilterValues
+    func explorerRoots() async throws -> [ExplorerRoot]
+    /// The folders directly under `path`, by name, capped by the core.
+    func explorerChildren(path: String) async throws -> ExplorerChildren
+    func listDevices() async throws -> [Device]
+    /// Writes a playlist to `path`; returns the number of tracks written.
+    func exportPlaylistFile(playlistID: String, path: String, format: PlaylistFileFormat) async throws -> UInt32
+    /// The audio file of a track (or a loose `file:` id).
+    func trackPath(id: String) async throws -> String
 }
 
 /// Forwards the Rust core's callbacks into an `AsyncStream`.
@@ -70,6 +80,14 @@ actor Backend: BackendProtocol {
     func viewIDsInRange(viewID: UInt32, from: UInt32, to: UInt32) async throws -> [String] {
         try core.viewIdsInRange(viewId: viewID, from: from, to: to)
     }
+    func filterValues(_ spec: ViewSpec) async throws -> FilterValues { try core.filterValues(spec: spec) }
+    func explorerRoots() async throws -> [ExplorerRoot] { try core.explorerRoots() }
+    func explorerChildren(path: String) async throws -> ExplorerChildren { try core.explorerChildren(path: path) }
+    func listDevices() async throws -> [Device] { try core.listDevices() }
+    func exportPlaylistFile(playlistID: String, path: String, format: PlaylistFileFormat) async throws -> UInt32 {
+        try core.exportPlaylistFile(playlistId: playlistID, path: path, format: format)
+    }
+    func trackPath(id: String) async throws -> String { try core.trackPath(trackId: id) }
 }
 
 func describe(_ error: Error) -> String {

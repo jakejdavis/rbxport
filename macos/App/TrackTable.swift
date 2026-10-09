@@ -29,6 +29,7 @@ struct TrackTable: NSViewRepresentable {
         table.doubleAction = #selector(Coordinator.rowDoubleClicked)
         table.onReturn = { [weak coordinator = context.coordinator] in coordinator?.loadSelectedToDeck() }
         table.onEscape = { [weak model] in model?.clearSearch() }
+        table.menuProvider = { [weak coordinator = context.coordinator] row in coordinator?.menu(forRow: row) }
         context.coordinator.table = table
         context.coordinator.installHeaderMenu()
 
@@ -176,6 +177,19 @@ struct TrackTable: NSViewRepresentable {
         func loadSelectedToDeck() {
             guard let table, let first = table.selectedRowIndexes.first, let row = pager.peek(at: first) else { return }
             model.loadToDeck(trackID: row.id)
+        }
+
+        // MARK: Context menu
+
+        /// Right-clicking an unselected row selects it first; the menu then acts on the selection.
+        func menu(forRow row: Int) -> NSMenu? {
+            guard let table, row >= 0, row < table.numberOfRows else { return nil }
+            if !table.selectedRowIndexes.contains(row) {
+                table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            }
+            let rows = ContextMenus.trackMenu(model.trackMenuContext())
+            let model = model
+            return MenuBuilder.menu(rows) { command in model.runTrackMenu(command) }
         }
 
         // MARK: Data source and cells
@@ -348,6 +362,12 @@ enum ColumnSizer {
 final class TrackNSTableView: NSTableView {
     var onReturn: (() -> Void)?
     var onEscape: (() -> Void)?
+    /// The menu for a right-click on a row (-1 when it hit no row).
+    var menuProvider: ((Int) -> NSMenu?)?
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        menuProvider?(row(at: convert(event.locationInWindow, from: nil)))
+    }
 
     override func keyDown(with event: NSEvent) {
         let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])

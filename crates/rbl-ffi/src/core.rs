@@ -8,13 +8,13 @@ use std::time::Instant;
 use rbl_app::dto::LibraryProblemDto;
 use rbl_app::error::run_command;
 use rbl_app::state::AppState;
-use rbl_app::{browse, startup, AppError, AppEvent, AppResult, EventSink};
+use rbl_app::{browse, explorer, startup, AppError, AppEvent, AppResult, EventSink};
 use rbl_db::{Library as Db, LibraryLocation, OpenMode};
 
 use crate::error::FfiError;
 use crate::events::{EventListener, ListenerSink};
 use crate::types::{
-    ExtraColumn, LibraryProblem, LibrarySummary, LoadOutcome, Row, TreeNode, ViewHandle, ViewSpec,
+    Device, ExplorerChildren, ExplorerRoot, ExtraColumn, FilterValues, LibraryProblem, PlaylistFileFormat, LibrarySummary, LoadOutcome, Row, TreeNode, ViewHandle, ViewSpec,
 };
 
 /// Where `load_library` gets the library from.
@@ -143,5 +143,45 @@ impl Core {
     pub fn view_ids_in_range(&self, view_id: u32, from: u32, to: u32) -> Result<Vec<String>, FfiError> {
         ffi("view_ids_in_range", || browse::view_ids_in_range(&self.state, view_id, from, to))
     }
-}
 
+    /// The BPMs and keys the filter bar offers for `spec`'s source and query.
+    /// The spec's own filter is ignored: counts are over the unfiltered list.
+    pub fn filter_values(&self, spec: ViewSpec) -> Result<FilterValues, FfiError> {
+        ffi("filter_values", || browse::filter_values(&self.state, &spec.into())).map(Into::into)
+    }
+
+    /// Where the Explorer starts: music, home, the system volume, mounted volumes.
+    pub fn explorer_roots(&self) -> Result<Vec<ExplorerRoot>, FfiError> {
+        ffi("explorer_roots", || Ok(explorer::explorer_roots()))
+            .map(|roots| roots.into_iter().map(Into::into).collect())
+    }
+
+    /// The folders directly under `path`, by name (capped); unreadable folders are empty.
+    pub fn explorer_children(&self, path: String) -> Result<ExplorerChildren, FfiError> {
+        ffi("explorer_children", || Ok(explorer::explorer_children(&path))).map(Into::into)
+    }
+
+    /// Mounted volumes an export could be written to. Reads each one; call when shown.
+    pub fn list_devices(&self) -> Result<Vec<Device>, FfiError> {
+        ffi("list_devices", || Ok(browse::list_devices())).map(|d| d.into_iter().map(Into::into).collect())
+    }
+
+    /// Writes a playlist to `path`; returns the track count written.
+    pub fn export_playlist_file(
+        &self,
+        playlist_id: String,
+        path: String,
+        format: PlaylistFileFormat,
+    ) -> Result<u32, FfiError> {
+        let format = match format {
+            PlaylistFileFormat::M3u8 => "m3u8",
+            PlaylistFileFormat::Txt => "txt",
+        };
+        ffi("export_playlist_file", || browse::export_playlist_file(&self.state, &playlist_id, &path, format))
+    }
+
+    /// The audio file of a track (or a loose `file:` id), for Show in Finder.
+    pub fn track_path(&self, track_id: String) -> Result<String, FfiError> {
+        ffi("track_path", || browse::track_path(&self.state, &track_id))
+    }
+}

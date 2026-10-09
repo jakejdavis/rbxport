@@ -17,6 +17,20 @@ actor MockBackend: BackendProtocol {
     private(set) var idRangeCalls: [(viewID: UInt32, from: UInt32, to: UInt32)] = []
     private(set) var openedSpecs: [ViewSpec] = []
     private(set) var treeCalls = 0
+    private(set) var filterValueSpecs: [ViewSpec] = []
+    private(set) var explorerChildrenCalls: [String] = []
+    private(set) var deviceCalls = 0
+    private(set) var exports: [(playlistID: String, path: String, format: PlaylistFileFormat)] = []
+
+    /// What the explorer, device and filter calls answer, set by tests.
+    var explorerRootList: [ExplorerRoot] = [ExplorerRoot(name: "Music", path: "/mock/Music")]
+    var explorerFolders: [String: ExplorerChildren] = [
+        "/mock/Music": ExplorerChildren(names: ["House", "Techno"], total: 2)
+    ]
+    var deviceList: [Device] = []
+    var filterValuesAnswer = FilterValues(
+        bpms: [CountedBpm(value: 120, count: 50), CountedBpm(value: 128, count: 5)],
+        keys: [CountedKey(value: "Am", count: 3), CountedKey(value: "C", count: 2)], tags: [])
 
     init(trackCount: Int = 300, nodes: [TreeNode]? = nil, failLoad: String? = nil) {
         (events, continuation) = AsyncStream.makeStream(of: LibraryEvent.self)
@@ -102,6 +116,37 @@ actor MockBackend: BackendProtocol {
         guard lo <= hi else { return [] }
         return (lo...hi).map { String(view.titles[$0] + 1) }
     }
+
+    func filterValues(_ spec: ViewSpec) async throws -> FilterValues {
+        filterValueSpecs.append(spec)
+        return filterValuesAnswer
+    }
+
+    func explorerRoots() async throws -> [ExplorerRoot] { explorerRootList }
+
+    func explorerChildren(path: String) async throws -> ExplorerChildren {
+        explorerChildrenCalls.append(path)
+        return explorerFolders[path] ?? ExplorerChildren(names: [], total: 0)
+    }
+
+    func listDevices() async throws -> [Device] {
+        deviceCalls += 1
+        return deviceList
+    }
+
+    func exportPlaylistFile(playlistID: String, path: String, format: PlaylistFileFormat) async throws -> UInt32 {
+        exports.append((playlistID, path, format))
+        return 5
+    }
+
+    func trackPath(id: String) async throws -> String { "/mock/audio/track-\(id).mp3" }
+
+    func setExplorer(roots: [ExplorerRoot], folders: [String: ExplorerChildren]) {
+        explorerRootList = roots
+        explorerFolders = folders
+    }
+
+    func setDevices(_ devices: [Device]) { deviceList = devices }
 
     static func title(_ n: Int) -> String { String(format: "Track %03d", n) }
 

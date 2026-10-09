@@ -15,6 +15,7 @@ pub mod durable;
 pub mod edits;
 pub mod error;
 pub mod events;
+pub mod explorer;
 pub mod file_journal;
 pub mod link;
 pub mod network_labels;
