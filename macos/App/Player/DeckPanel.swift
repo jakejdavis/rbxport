@@ -440,7 +440,14 @@ struct OverviewWaveform: View {
                     guard deck.waveformClick else { return }
                     deck.seek(toFraction: value.location.x / size.width)
                 })
-            .onChange(of: request(size), initial: true) { _, wanted in
+            .task(id: request(size)) {
+                let wanted = request(size)
+                // While the width is still changing (the inspector sliding, a divider dragged)
+                // the shown image stretches; one render follows once it settles.
+                if deck.overview != nil {
+                    try? await Task.sleep(for: .milliseconds(120))
+                    guard !Task.isCancelled else { return }
+                }
                 deck.requestOverview(
                     palette: wanted.palette, pixelWidth: wanted.width, pixelHeight: wanted.height, scale: scale)
             }

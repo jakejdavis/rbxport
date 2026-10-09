@@ -215,12 +215,38 @@ struct DeckModelTests {
         deck.togglePlay()
         #expect(deck.isPlaying)
         #expect(playback.calls.last == .play(.a))
+        // The head waits for the engine to report the deck moving.
+        #expect(deck.anchor.extrapolate(at: 101) == 5)
+        deck.apply(tick: tick(frames: 48_000 * 5 + 4_800, playing: true), sampleRate: 48_000, at: 100.1)
         clock.now = 102
-        #expect(deck.anchor.extrapolate(at: 102) == 7)
+        #expect(abs(deck.anchor.extrapolate(at: 102) - 7) < 1e-9)
         deck.togglePlay()
         #expect(!deck.isPlaying)
         #expect(playback.calls.last == .pause(.a))
-        #expect(deck.anchor.extrapolate(at: 200) == 7)
+        #expect(abs(deck.anchor.extrapolate(at: 200) - 7) < 1e-9)
+    }
+
+    @Test func aDeviceSlowToStartLeavesTheHeadStillRatherThanRunningAheadOfIt() {
+        let playback = MockPlayback()
+        let clock = Clock()
+        let deck = makeDeck(playback, clock: clock)
+        deck.load(track())
+        deck.handle(deckEvent: deckEvent(1))
+        deck.apply(tick: tick(frames: 48_000 * 5, playing: false), sampleRate: 48_000, at: 100)
+        clock.now = 100
+        deck.play()
+        // Bluetooth: the engine says playing, but the device has not pulled a frame yet.
+        for at in [100.1, 100.2, 100.3] {
+            deck.apply(tick: tick(frames: 48_000 * 5, playing: true), sampleRate: 48_000, at: at)
+            #expect(deck.anchor.extrapolate(at: at + 0.09) == 5)
+        }
+        // A tempo change while waiting does not set it running either.
+        clock.now = 100.35
+        deck.setTempo(1.02)
+        #expect(deck.anchor.extrapolate(at: 100.39) == 5)
+        // The device starts: from here the head runs on between ticks.
+        deck.apply(tick: tick(frames: 48_000 * 5 + 2_400, playing: true, tempo: 1.02), sampleRate: 48_000, at: 100.4)
+        #expect(abs(deck.anchor.extrapolate(at: 100.5) - (5.05 + 0.1 * 1.02)) < 1e-6)
     }
 
     @Test func cdjCueThroughTheDeck() {

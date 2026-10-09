@@ -32,6 +32,9 @@ final class DetailWaveformNSView: NSView {
     private var barsText = ""
     private var loopSignature = ""
     private var gate = WheelZoomGate()
+    /// The render that follows a resize, once the width stops changing.
+    private var settle: DispatchWorkItem?
+    static let settleDelay = 0.12
     // Drag
     private var pressX: CGFloat = 0
     private var dragging = false
@@ -91,8 +94,24 @@ final class DetailWaveformNSView: NSView {
     }
 
     override func setFrameSize(_ newSize: NSSize) {
+        let resized = abs(newSize.width - frame.width) >= 0.5
         super.setFrameSize(newSize)
-        // Next turn: laying out is no time to be changing layers and asking SwiftUI for more.
+        guard resized, frame.width > 1 else { return refreshSoon() }
+        // The width sets the zoom, so every new width re-renders every tile. While it is still
+        // changing (the inspector sliding, a divider dragged) the old tiles stay; one render
+        // follows once it settles.
+        settle?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.settle = nil
+            self?.refresh(at: CACurrentMediaTime())
+        }
+        settle = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.settleDelay, execute: work)
+        if drawnKey.isEmpty { refreshSoon() }
+    }
+
+    /// Next turn: laying out is no time to be changing layers and asking SwiftUI for more.
+    private func refreshSoon() {
         DispatchQueue.main.async { [weak self] in self?.refresh(at: CACurrentMediaTime()) }
     }
 
@@ -161,6 +180,8 @@ final class DetailWaveformNSView: NSView {
         let everyBeat = DetailZoom.showsEveryBeat(deck.zoomBars)
         let drawKey = "\(deck.track?.id ?? "")|\(palette.rawValue)|\(Int(pps * 100))|\(heightPx)|\(deck.beatsVersion)|\(everyBeat)|\(bytes.count)"
         if drawKey != drawnKey {
+            // Mid-resize: keep what is on screen rather than re-render at every width.
+            if settle != nil, !drawnKey.isEmpty { return }
             clearTiles()
             drawnKey = drawKey
         }

@@ -23,6 +23,7 @@ struct SidebarOutline: NSViewRepresentable {
         outline.indentationPerLevel = 12
         let column = NSTableColumn(identifier: .init("name"))
         column.resizingMask = .autoresizingMask
+        column.minWidth = 40
         outline.addTableColumn(column)
         outline.outlineTableColumn = column
         outline.dataSource = context.coordinator
@@ -36,13 +37,21 @@ struct SidebarOutline: NSViewRepresentable {
             coordinator?.nodeReloaded(node)
         }
 
-        let scroll = NSScrollView()
+        let scroll = SidebarScrollView()
         scroll.documentView = outline
         scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.horizontalScrollElasticity = .none
         scroll.autohidesScrollers = true
         scroll.drawsBackground = false
         context.coordinator.reload()
         return scroll
+    }
+
+    /// Whatever the split view offers: the outline's own width must never become the sidebar's,
+    /// or the column, the outline and the sidebar widen each other until the window overflows.
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? WindowGeometryStore.defaultSidebarWidth, height: proposal.height ?? 400)
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
@@ -419,6 +428,18 @@ final class ClosureMenuItem: NSMenuItem {
     @objc private func run() { handler?() }
 }
 
+/// Keeps the outline's one column as wide as the visible sidebar, so names use all the room
+/// there is and the outline never scrolls sideways. Sized from the clip view, which the column
+/// cannot feed back into.
+final class SidebarScrollView: NSScrollView {
+    override func tile() {
+        super.tile()
+        guard let outline = documentView as? NSOutlineView else { return }
+        // AppKit's own fit counts the source list's row insets as well as the cell spacing.
+        if abs(outline.frame.width - contentView.bounds.width) >= 0.5 { outline.sizeLastColumnToFit() }
+    }
+}
+
 /// `NSOutlineView` that asks for a menu per row, and does not select what it right-clicks.
 final class SidebarNSOutlineView: NSOutlineView {
     var menuProvider: ((SidebarNode) -> NSMenu?)?
@@ -473,6 +494,9 @@ final class SidebarCellView: NSTableCellView {
         count.textColor = .tertiaryLabelColor
         count.translatesAutoresizingMaskIntoConstraints = false
         count.setContentCompressionResistancePriority(.required, for: .horizontal)
+        count.setContentHuggingPriority(.required, for: .horizontal)
+        label.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         eject.isBordered = false
         eject.imagePosition = .imageOnly
         eject.image = NSImage(systemSymbolName: "eject.fill", accessibilityDescription: "Eject")
@@ -495,7 +519,8 @@ final class SidebarCellView: NSTableCellView {
             icon.widthAnchor.constraint(equalToConstant: 18),
             label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 5),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: count.leadingAnchor, constant: -4),
+            // The name takes all the room the count leaves; it truncates only when the row does.
+            label.trailingAnchor.constraint(equalTo: count.leadingAnchor, constant: -4),
             count.trailingAnchor.constraint(equalTo: eject.leadingAnchor, constant: -2),
             count.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
