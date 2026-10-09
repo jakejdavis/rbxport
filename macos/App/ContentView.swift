@@ -41,6 +41,15 @@ struct ContentView: View {
             } detail: {
                 DetailView()
             }
+            // On the split view, not inside the detail: there it becomes a split view of its own
+            // whose minimum (counted even while closed) pushes the columns past the window's edges.
+            .inspector(isPresented: $model.infoPanelOpen) {
+                InfoPanelView(model: model.info)
+                    .inspectorColumnWidth(
+                        min: WindowGeometryStore.infoRange.lowerBound, ideal: model.geometry.initialInfoWidth,
+                        max: WindowGeometryStore.infoRange.upperBound)
+                    .onGeometryChange(for: Double.self, of: { Double($0.size.width) }) { model.geometry.setInfoWidth($0) }
+            }
             .onChange(of: model.syncWindowRequests) { openWindow(id: SyncManagerScene.id) }
             .sheet(item: $model.smartEditor) { editor in
                 SmartEditorSheet(
@@ -115,7 +124,6 @@ struct DetailView: View {
     static let browserReserve = 170.0
 
     var body: some View {
-        @Bindable var model = model
         // Not a VSplitView: an AppKit view inside its first pane (the detail waveform) sends the
         // split view's size constraints into an endless update. The divider is drawn here instead.
         GeometryReader { geometry in
@@ -167,13 +175,6 @@ struct DetailView: View {
             }
             .frame(minHeight: 120)
         }
-        }
-        .inspector(isPresented: $model.infoPanelOpen) {
-            InfoPanelView(model: model.info)
-                .inspectorColumnWidth(
-                    min: WindowGeometryStore.infoRange.lowerBound, ideal: model.geometry.initialInfoWidth,
-                    max: WindowGeometryStore.infoRange.upperBound)
-                .onGeometryChange(for: Double.self, of: { Double($0.size.width) }) { model.geometry.setInfoWidth($0) }
         }
         .overlay(alignment: .top) {
             if let error = model.viewError {
@@ -263,6 +264,7 @@ struct MasterLevelControl: View {
             Text(MasterScale.label(master.reading))
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 16, alignment: .trailing)
         }
+        .padding(.horizontal, 8)
         .help("Master level (10 is the default, 11 is +2 dB)")
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Master level")

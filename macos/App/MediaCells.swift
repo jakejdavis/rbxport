@@ -50,7 +50,6 @@ enum PreviewLayout {
 
     static let hotCueDefault = NSColor(srgbRed: 0x3C / 255, green: 0xEB / 255, blue: 0x50 / 255, alpha: 1)
     static let memoryCue = NSColor(srgbRed: 0xEA / 255, green: 0x33 / 255, blue: 0x23 / 255, alpha: 1)
-    static let well = NSColor(white: 0.04, alpha: 1)
 
     static func cueColour(_ hex: String?) -> NSColor {
         guard let hex, let rgb = RGB(hexString: hex) else { return hotCueDefault }
@@ -201,8 +200,6 @@ final class PreviewCellView: NSTableCellView {
         guard band.width > 0, band.height > 0 else { return }
         context.saveGState()
         defer { context.restoreGState() }
-        context.setFillColor(PreviewLayout.well.cgColor)
-        context.fill(bounds.insetBy(dx: 0, dy: 0.5))
         if let image {
             context.interpolationQuality = .none
             context.draw(image, in: band)

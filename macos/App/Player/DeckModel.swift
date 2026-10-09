@@ -162,6 +162,12 @@ final class DeckModel {
     /// Ticks do not move the playhead until this, after a scrub lets go.
     @ObservationIgnored private var tickHoldUntil: TimeInterval = 0
     @ObservationIgnored private var scrubResume = false
+    /// Play was pressed and the engine has not yet reported the deck moving. A device that is
+    /// slow to start (Bluetooth) leaves the position still for a few hundred ms; extrapolating
+    /// over that runs the head ahead of each tick and drags it back, so it waits instead.
+    @ObservationIgnored private var awaitingStart = false
+    /// The engine's position in the last tick taken, to tell a deck that has started moving.
+    @ObservationIgnored private var lastTick: (generation: UInt32, frames: Int64)?
     @ObservationIgnored fileprivate var rawPhrases: [Phrase] = []
 
     // Sync and DUAL CONTROL (the two-deck layout). The player wires these.
@@ -230,6 +236,8 @@ final class DeckModel {
         anchor = .none
         totalFrames = 0
         landing = nil
+        awaitingStart = false
+        lastTick = nil
         playWhenReady = wasPlaying
         resumeAt = nil
         display.reset()
@@ -256,6 +264,8 @@ final class DeckModel {
         anchor = .none
         totalFrames = 0
         landing = nil
+        awaitingStart = false
+        lastTick = nil
         artwork = nil
         overview = nil
         overviewKey = nil
@@ -327,10 +337,15 @@ final class DeckModel {
             if t.generation == landing.generation && time < landing.until { return }
             self.landing = nil
         }
+        if awaitingStart, let lastTick, lastTick.generation == t.generation, lastTick.frames != t.frames {
+            awaitingStart = false
+        }
+        lastTick = (t.generation, t.frames)
         let next = Anchor(
             frames: t.frames, at: time, sampleRate: sampleRate, playing: t.playing, generation: t.generation,
-            // A play held for the beat has not started: the head stays put until it does.
-            rate: t.startInFrames > 0 ? 0 : Double(t.tempo))
+            // A play held for the beat, or one the device has not started on, has not begun: the
+            // head stays put until it does.
+            rate: t.startInFrames > 0 || (awaitingStart && t.playing) ? 0 : Double(t.tempo))
         if next != anchor { anchor = next }
     }
 
@@ -403,8 +418,14 @@ final class DeckModel {
         var next = anchor
         if next.sampleRate > 0 { next.frames = Int64((anchor.extrapolate(at: time) * Double(next.sampleRate)).rounded()) }
         next.at = time
-        if let playing { next.playing = playing }
+        if let playing {
+            // Starting: hold the head until the engine's ticks show the deck moving.
+            if playing && !anchor.playing { awaitingStart = true }
+            if !playing { awaitingStart = false }
+            next.playing = playing
+        }
         if let rate { next.rate = rate }
+        if awaitingStart { next.rate = 0 }
         anchor = next
     }
 
