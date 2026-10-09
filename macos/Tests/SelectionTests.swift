@@ -139,8 +139,9 @@ struct SelectionTests {
     @Test func loadToDeckIsAHook() async {
         let model = await ready()
         var loaded: [String] = []
-        model.onLoadToDeck = { loaded.append($0) }
+        model.onLoadToDeck = { id, deck in loaded.append("\(id)\(deck == .a ? "A" : "B")") }
         model.loadToDeck(trackID: "42")
-        #expect(loaded == ["42"])
+        model.loadToDeck(trackID: "43", deck: .b)
+        #expect(loaded == ["42A", "43B"])
     }
 }

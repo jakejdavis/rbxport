@@ -41,9 +41,8 @@ struct MeterBallistics: Equatable, Sendable {
     var isActive: Bool { db > Self.floorDb || markerDb > Self.floorDb }
 }
 
-/// Deck A's channel meter and the master pair. The engine reports only the master's peaks, so the
-/// channel bar follows them while deck A sounds (deck B cannot be loaded yet); a per-deck tap
-/// arrives with the dual decks.
+/// A deck's channel meter and the master pair. The channel bar reads that deck's own peak, taken
+/// after its strip (trim, EQ, crossfader) and before the master level; the pair is the master.
 struct VUMeters: View {
     let player: PlayerModel
     let deck: DeckModel
@@ -64,7 +63,7 @@ struct VUMeters: View {
                 let now = timeline.date.timeIntervalSinceReferenceDate
                 step(now: now)
                 let barWidth = (size.width - 8) / 3
-                let labels = ["A", "L", "R"]
+                let labels = [deck.deck == .a ? "A" : "B", "L", "R"]
                 let values = [bars.channel, bars.left, bars.right]
                 for (i, bar) in values.enumerated() {
                     let x = CGFloat(i) * (barWidth + 4)
@@ -115,6 +114,47 @@ struct VUMeters: View {
         let right = fresh ? Double(player.meters?.peakRight ?? 0) : 0
         bars.left.step(peak: left, dt: dt)
         bars.right.step(peak: right, dt: dt)
-        bars.channel.step(peak: deck.isPlaying ? max(left, right) : 0, dt: dt)
+        bars.channel.step(peak: player.channelPeak(deck.deck), dt: dt)
+    }
+}
+
+/// A deck's channel level as a thin horizontal bar: the mixer strip's meter in the two-deck layout.
+struct ChannelMeter: View {
+    let player: PlayerModel
+    let deck: DeckModel
+    @State private var bars = Bars()
+
+    final class Bars {
+        var channel = MeterBallistics()
+        var last: TimeInterval?
+    }
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 60, paused: !(deck.isPlaying || bars.channel.isActive))) { timeline in
+            Canvas { context, size in
+                let now = timeline.date.timeIntervalSinceReferenceDate
+                let dt = bars.last.map { min(now - $0, 0.25) } ?? 0
+                bars.last = now
+                bars.channel.step(peak: player.channelPeak(deck.deck), dt: dt)
+                let well = CGRect(origin: .zero, size: size)
+                context.fill(Path(roundedRect: well, cornerRadius: 1.5), with: .color(PlayerStyle.well))
+                let wide = size.width * bars.channel.height
+                if wide > 0 {
+                    context.fill(
+                        Path(CGRect(x: 0, y: 0, width: wide, height: size.height)),
+                        with: .linearGradient(
+                            Gradient(stops: [
+                                .init(color: PlayerStyle.playing, location: 0.55), .init(color: .yellow, location: 0.82),
+                                .init(color: .red, location: 1),
+                            ]), startPoint: .zero, endPoint: CGPoint(x: size.width, y: 0)))
+                }
+                if bars.channel.markerHeight > 0 {
+                    let x = size.width * bars.channel.markerHeight
+                    context.fill(Path(CGRect(x: x - 1, y: 0, width: 1.5, height: size.height)), with: .color(.white.opacity(0.85)))
+                }
+            }
+        }
+        .accessibilityElement()
+        .accessibilityLabel("Deck \(deck.deck == .a ? "A" : "B") level")
     }
 }

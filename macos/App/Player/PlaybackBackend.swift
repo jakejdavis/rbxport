@@ -50,6 +50,29 @@ protocol PlaybackEngine: Sendable {
     func setMetronomeSound(_ sound: UInt8)
     /// Both decks now, for starting up and for after a reset.
     func state() -> PlaybackTick
+    /// Starts a deck after `delayMs` of silence the audio callback counts: quantized play on a
+    /// synced deck, held for the master's next beat.
+    func playAfter(deck: Deck, delayMs: Double)
+
+    // The mixer, master and limiter. Remembered and applied when the engine opens: none of
+    // these opens the output.
+
+    /// The mixer as the engine holds it, or as it will when it opens.
+    func mixer() -> MixerSnapshot
+    func setChannelTrim(deck: Deck, trim: Float)
+    func setChannelBand(deck: Deck, band: EqBand, position: Float)
+    func setChannelKill(deck: Deck, band: EqBand, killed: Bool)
+    func setCrossfade(_ position: Float)
+    /// The master level as a linear gain.
+    func setMasterLevel(_ level: Float)
+    /// Sets the limiter; what comes back is what the engine's clamping made of it.
+    func setLimiter(_ limiter: Limiter) -> Limiter
+
+    // The output. A change drops a live engine and a `.reset` event follows.
+
+    func audioDevices() -> AudioDevices
+    func setAudioDevice(_ id: String?)
+    func setAudioConfig(sampleRate: UInt32?, bufferFrames: UInt32?)
 
     /// Plays a track from a position without loading it on a deck (pausing the decks).
     func previewPlay(trackID: String, positionMs: Double, token: UInt64)
@@ -138,6 +161,30 @@ final class RustPlayback: PlaybackEngine, @unchecked Sendable {
     }
 
     func state() -> PlaybackTick { playback.state() }
+
+    func playAfter(deck: Deck, delayMs: Double) {
+        transport.async { [playback, continuation] in
+            do { try playback.playAfter(deck: deck, delayMs: delayMs) } catch { continuation.yield(.failure(describe(error))) }
+        }
+    }
+
+    func mixer() -> MixerSnapshot { playback.mixer() }
+    func setChannelTrim(deck: Deck, trim: Float) { transport.async { [playback] in playback.setChannelTrim(deck: deck, trim: trim) } }
+    func setChannelBand(deck: Deck, band: EqBand, position: Float) {
+        transport.async { [playback] in playback.setChannelBand(deck: deck, band: band, position: position) }
+    }
+    func setChannelKill(deck: Deck, band: EqBand, killed: Bool) {
+        transport.async { [playback] in playback.setChannelKill(deck: deck, band: band, killed: killed) }
+    }
+    func setCrossfade(_ position: Float) { transport.async { [playback] in playback.setCrossfade(position: position) } }
+    func setMasterLevel(_ level: Float) { transport.async { [playback] in playback.setMasterLevel(level: level) } }
+    func setLimiter(_ limiter: Limiter) -> Limiter { playback.setLimiter(limiter: limiter) }
+
+    func audioDevices() -> AudioDevices { playback.audioDevices() }
+    func setAudioDevice(_ id: String?) { transport.async { [playback] in _ = playback.setAudioDevice(device: id) } }
+    func setAudioConfig(sampleRate: UInt32?, bufferFrames: UInt32?) {
+        transport.async { [playback] in _ = playback.setAudioConfig(sampleRate: sampleRate, bufferFrames: bufferFrames) }
+    }
 
     func previewPlay(trackID: String, positionMs: Double, token: UInt64) {
         previews.async { [playback, continuation] in

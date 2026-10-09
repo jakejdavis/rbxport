@@ -154,6 +154,10 @@ pub struct Master {
     peak_right: AtomicU32,
     rms_left: AtomicU32,
     rms_right: AtomicU32,
+    /// Each deck's loudest sample since last read, after its channel strip
+    /// (trim, EQ, crossfader) and before the master level: what a channel
+    /// meter on a mixer shows. Left and right folded together.
+    deck_peak: [AtomicU32; 2],
     /// The lowest gain the limiter applied since the meter was last read, as
     /// a linear factor: 1.0 is a limiter that did nothing.
     reduction: AtomicU32,
@@ -174,6 +178,7 @@ impl Default for Master {
             peak_right: AtomicU32::new(0),
             rms_left: AtomicU32::new(0),
             rms_right: AtomicU32::new(0),
+            deck_peak: [AtomicU32::new(0), AtomicU32::new(0)],
             reduction: AtomicU32::new(1.0_f32.to_bits()),
             rate: AtomicU32::new(0),
         }
@@ -222,6 +227,21 @@ impl Master {
                 Err(seen) => current = seen,
             }
         }
+    }
+
+    /// A deck's peak for the last callback, held like the master's.
+    fn report_deck(&self, index: usize, peak: f32) {
+        if let Some(slot) = self.deck_peak.get(index) {
+            Self::hold(slot, peak);
+        }
+    }
+
+    /// Each deck's loudest sample since the last read, A then B; clears on read.
+    pub fn deck_peaks(&self) -> [f32; 2] {
+        [
+            f32::from_bits(self.deck_peak[0].swap(0, Ordering::Relaxed)),
+            f32::from_bits(self.deck_peak[1].swap(0, Ordering::Relaxed)),
+        ]
     }
 
     fn hold(slot: &AtomicU32, value: f32) {
@@ -388,6 +408,7 @@ impl Engine {
                     let fader = if i == 0 { fade_a } else { fade_b };
                     let Some(settings) = strip.channels.get(i) else { continue };
                     channel.process(buffer, settings, curve, fader);
+                    mixing.report_deck(i, buffer.iter().fold(0.0_f32, |peak, s| peak.max(s.abs())));
                     // The click after the strip, so an EQ cut does not muffle
                     // it, and only while the deck is playing: a scrub crosses
                     // beats too, and nobody wants it clicking.

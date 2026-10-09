@@ -93,7 +93,7 @@ pub struct AudioDevicesDto {
 ///
 /// Both directions: what a command is given and what `master_limiter`
 /// returns, so a value the engine clamped comes home clamped.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LimiterDto {
     /// Input gain in dB, −24 to +24. Missing in older clients means unity.

@@ -21,6 +21,15 @@ final class MockPlayback: PlaybackEngine, @unchecked Sendable {
         case scrubEnd(Deck)
         case metronome(Deck, Bool)
         case metronomeSound(UInt8)
+        case playAfter(Deck, Double)
+        case trim(Deck, Float)
+        case band(Deck, EqBand, Float)
+        case kill(Deck, EqBand, Bool)
+        case crossfade(Float)
+        case masterLevel(Float)
+        case limiter(Limiter)
+        case audioDevice(String?)
+        case audioConfig(UInt32?, UInt32?)
         case previewPlay(String, Double, UInt64)
         case previewStop
     }
@@ -37,7 +46,18 @@ final class MockPlayback: PlaybackEngine, @unchecked Sendable {
         var failLoads: String?
         var previewError: String?
         var preview = PreviewState(trackId: nil, playing: false, positionMs: 0, durationMs: 0)
+        var mixer = MockPlayback.defaultMixer
+        var devices = AudioDevices(
+            devices: [AudioDevice(id: "dev-1", name: "Built-in Output"), AudioDevice(id: "dev-2", name: "Studio Interface")],
+            defaultId: "dev-1", chosenId: nil)
+        /// A device or rate change drops the engine, as the real one does.
+        var resetOnOutputChange = true
+        var config: [UInt32?]?
     }
+
+    static let defaultChannel = ChannelState(
+        trim: 1, low: 0.5, mid: 0.5, high: 0.5, killLow: false, killMid: false, killHigh: false)
+    static let defaultMixer = MixerSnapshot(a: defaultChannel, b: defaultChannel, crossfade: 0.5, isolator: false)
 
     init() { (events, continuation) = AsyncStream.makeStream(of: PlaybackEvent.self) }
 
@@ -48,6 +68,10 @@ final class MockPlayback: PlaybackEngine, @unchecked Sendable {
     func failLoads(with message: String?) { lock.withLock { $0.failLoads = message } }
     func failPreviews(with message: String?) { lock.withLock { $0.previewError = message } }
     func setPreview(_ state: PreviewState) { lock.withLock { $0.preview = state } }
+
+    /// Seeds the mixer as the "engine" holds it, for the read-back (#4) tests.
+    func setMixer(_ mixer: MixerSnapshot) { lock.withLock { $0.mixer = mixer } }
+    func setResetOnOutputChange(_ on: Bool) { lock.withLock { $0.resetOnOutputChange = on } }
 
     func send(_ event: PlaybackEvent) { continuation.yield(event) }
 
@@ -95,6 +119,81 @@ final class MockPlayback: PlaybackEngine, @unchecked Sendable {
     func setMetronome(deck: Deck, on: Bool) { record(.metronome(deck, on)) }
     func setMetronomeSound(_ sound: UInt8) { record(.metronomeSound(sound)) }
     func state() -> PlaybackTick { Self.makeTick(a: Self.emptyDeck, b: Self.emptyDeck, sampleRate: 0) }
+    func playAfter(deck: Deck, delayMs: Double) { record(.playAfter(deck, delayMs)) }
+
+    func mixer() -> MixerSnapshot { lock.withLock { $0.mixer } }
+
+    private func edit(_ deck: Deck, _ change: (inout ChannelState) -> Void) {
+        lock.withLockUnchecked { s in
+            if deck == .a { change(&s.mixer.a) } else { change(&s.mixer.b) }
+        }
+    }
+
+    func setChannelTrim(deck: Deck, trim: Float) {
+        record(.trim(deck, trim))
+        edit(deck) { $0.trim = trim }
+    }
+
+    func setChannelBand(deck: Deck, band: EqBand, position: Float) {
+        record(.band(deck, band, position))
+        edit(deck) {
+            switch band {
+            case .low: $0.low = position
+            case .mid: $0.mid = position
+            case .high: $0.high = position
+            }
+        }
+    }
+
+    func setChannelKill(deck: Deck, band: EqBand, killed: Bool) {
+        record(.kill(deck, band, killed))
+        edit(deck) {
+            switch band {
+            case .low: $0.killLow = killed
+            case .mid: $0.killMid = killed
+            case .high: $0.killHigh = killed
+            }
+        }
+    }
+
+    func setCrossfade(_ position: Float) {
+        record(.crossfade(position))
+        lock.withLock { $0.mixer.crossfade = position }
+    }
+
+    func setMasterLevel(_ level: Float) { record(.masterLevel(level)) }
+
+    func setLimiter(_ limiter: Limiter) -> Limiter {
+        record(.limiter(limiter))
+        // The engine's own clamps.
+        return Limiter(
+            enabled: limiter.enabled, inputGainDb: min(max(limiter.inputGainDb, -24), 24),
+            ceilingDb: min(max(limiter.ceilingDb, -12), 0), releaseMs: min(max(limiter.releaseMs, 10), 1000))
+    }
+
+    func audioDevices() -> AudioDevices { lock.withLock { $0.devices } }
+
+    func setAudioDevice(_ id: String?) {
+        record(.audioDevice(id))
+        let reset = lock.withLock { s -> Bool in
+            let changed = s.devices.chosenId != id
+            s.devices.chosenId = id
+            return changed && s.resetOnOutputChange
+        }
+        if reset { send(.reset) }
+    }
+
+    func setAudioConfig(sampleRate: UInt32?, bufferFrames: UInt32?) {
+        record(.audioConfig(sampleRate, bufferFrames))
+        // The first push (at launch) finds no engine to drop; a later change does.
+        let reset = lock.withLock { s -> Bool in
+            let next = [sampleRate, bufferFrames]
+            defer { s.config = next }
+            guard let previous = s.config else { return false }
+            return previous != next && s.resetOnOutputChange
+        }
+        if reset { send(.reset) }
+    }
 
     func previewPlay(trackID: String, positionMs: Double, token: UInt64) {
         record(.previewPlay(trackID, positionMs, token))

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rbl_ffi::{
-    Core, Deck, DeckEvent, EventListener, FfiError, LibraryEvent, LoadOutcome, Meters, PlaybackListener, PlaybackTick,
+    Core, Deck, DeckEvent, EqBand, EventListener, FfiError, LibraryEvent, Limiter, LoadOutcome, Meters, PlaybackListener, PlaybackTick,
     SearchField, SortKey, TrackFilter, TrackSource, ViewSpec,
 };
 
@@ -19,20 +19,25 @@ impl EventListener for Quiet {
 struct Recorder {
     ticks: Mutex<Vec<PlaybackTick>>,
     meters: Mutex<u32>,
+    last_meters: Mutex<Option<Meters>>,
     events: Mutex<Vec<DeckEvent>>,
+    resets: Mutex<u32>,
 }
 
 impl PlaybackListener for Recorder {
     fn on_tick(&self, tick: PlaybackTick) {
         self.ticks.lock().unwrap().push(tick);
     }
-    fn on_meters(&self, _meters: Meters) {
+    fn on_meters(&self, meters: Meters) {
         *self.meters.lock().unwrap() += 1;
+        *self.last_meters.lock().unwrap() = Some(meters);
     }
     fn on_deck_event(&self, event: DeckEvent) {
         self.events.lock().unwrap().push(event);
     }
-    fn on_reset(&self) {}
+    fn on_reset(&self) {
+        *self.resets.lock().unwrap() += 1;
+    }
 }
 
 fn write_wav(path: &std::path::Path, seconds: u32) {
@@ -228,4 +233,66 @@ fn key_shift_and_the_metronome_are_remembered_and_applied() {
     assert!(playback.metronome_on(Deck::A));
     playback.set_metronome(Deck::A, false);
     assert!(!playback.metronome_on(Deck::A));
+}
+
+#[test]
+fn the_mixer_master_and_limiter_are_stored_without_opening_the_output_and_read_back() {
+    std::env::set_var("RBXPORT_NULL_AUDIO", "1");
+    let lib = tempfile::tempdir().unwrap();
+    let core = Core::with_fixture(Arc::new(Quiet), lib.path().to_string_lossy().into_owned());
+    let recorder = Arc::new(Recorder::default());
+    let playback = core.playback(recorder.clone());
+
+    playback.set_channel_trim(Deck::A, 1.4);
+    playback.set_channel_band(Deck::B, EqBand::High, 0.2);
+    playback.set_channel_kill(Deck::A, EqBand::Low, true);
+    playback.set_crossfade(0.35);
+    playback.set_master_level(0.7);
+    let set = playback.set_limiter(Limiter { enabled: true, input_gain_db: 40.0, ceiling_db: -3.0, release_ms: 5.0 });
+    // The engine's clamps, not what was asked for.
+    assert_eq!((set.input_gain_db, set.ceiling_db, set.release_ms), (24.0, -3.0, 10.0));
+    assert!(playback.limiter().enabled);
+    // Nothing above opened the output: there is no sample rate yet.
+    assert_eq!(playback.state().sample_rate, 0);
+
+    // #4: the strip reads back what the engine will be given.
+    let mixer = playback.mixer();
+    assert_eq!(mixer.a.trim, 1.4);
+    assert!(mixer.a.kill_low && !mixer.a.kill_high);
+    assert_eq!(mixer.b.high, 0.2);
+    assert_eq!(mixer.crossfade, 0.35);
+    assert_eq!(playback.master_level(), 0.7);
+
+    // An unchanged device or rate is not a reset, and with no engine neither is a change.
+    assert!(!playback.set_audio_device(None));
+    assert!(!playback.set_audio_config(Some(48_000), Some(512)));
+    assert_eq!(*recorder.resets.lock().unwrap(), 0);
+    assert!(playback.audio_devices().chosen_id.is_none());
+}
+
+#[test]
+fn a_device_change_drops_the_live_engine_and_tells_the_listener() {
+    let (_core, playback, recorder, _id, _lib, _music) = loose_deck(2);
+    assert!(playback.state().sample_rate > 0);
+    playback.set_crossfade(0.2);
+    assert!(playback.set_audio_config(None, Some(1_024)));
+    assert_eq!(*recorder.resets.lock().unwrap(), 1);
+    assert_eq!(playback.state().sample_rate, 0);
+    // The strip survives the rebuild.
+    assert_eq!(playback.mixer().crossfade, 0.2);
+    // The engine is already gone, so naming a device drops nothing more.
+    assert!(!playback.set_audio_device(Some("not-a-device".into())));
+}
+
+#[test]
+fn deck_b_is_loaded_and_heard_on_its_own_channel() {
+    let (_core, playback, recorder, id, _lib, _music) = loose_deck(4);
+    playback.load(Deck::B, id, 9).unwrap();
+    wait("deck B to load", || recorder.events.lock().unwrap().iter().any(|e| e.load_id == 9 && e.deck == Deck::B));
+    playback.play(Deck::B).unwrap();
+    wait("deck B's own meter", || {
+        // The meter events carry the channel peaks; the recorder keeps the latest.
+        recorder.last_meters.lock().unwrap().is_some_and(|m| m.deck_b_peak > 0.05 && m.deck_a_peak == 0.0)
+    });
+    playback.pause(Deck::B);
 }

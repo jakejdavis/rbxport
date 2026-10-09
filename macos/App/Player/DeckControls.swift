@@ -15,11 +15,12 @@ extension Color {
 /// pad is dim, since setting one is a library write.
 struct PadRow: View {
     let deck: DeckModel
+    var compact = false
 
     var body: some View {
         HStack(spacing: 3) {
             ForEach(CueLookup.padLetters, id: \.self) { letter in
-                Pad(deck: deck, letter: letter, cue: CueLookup.hot(deck.cues, letter: letter))
+                Pad(deck: deck, letter: letter, cue: CueLookup.hot(deck.cues, letter: letter), compact: compact)
             }
         }
     }
@@ -29,6 +30,7 @@ private struct Pad: View {
     let deck: DeckModel
     let letter: String
     let cue: DeckCue?
+    var compact = false
     @State private var pressed = false
 
     var body: some View {
@@ -37,7 +39,7 @@ private struct Pad: View {
         Text(letter)
             .font(.system(size: 13, weight: .bold))
             .foregroundStyle(cue == nil ? PlayerStyle.dim.opacity(0.5) : .black)
-            .frame(width: 30, height: 34)
+            .frame(width: compact ? 26 : 30, height: compact ? 28 : 34)
             .background(
                 cue == nil ? colour : colour.opacity(held ? 1 : 0.82), in: .rect(cornerRadius: 4)
             )
@@ -228,19 +230,20 @@ struct KeyShiftView: View {
 
 struct ZoomColumn: View {
     let deck: DeckModel
+    var compact = false
 
     var body: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: compact ? 2 : 4) {
             Button { deck.zoom(direction: -1) } label: { Image(systemName: "plus") }
-                .buttonStyle(ControlButtonStyle(width: 24, height: 24))
+                .buttonStyle(ControlButtonStyle(width: 24, height: compact ? 18 : 24))
                 .disabled(deck.zoomBars <= DetailZoom.steps[0])
                 .help("Zoom in (+)")
             Text(DetailZoom.label(deck.zoomBars))
                 .font(.system(size: 11, weight: .bold).monospacedDigit())
                 .foregroundStyle(PlayerStyle.text)
-            Text("BARS").font(.system(size: 7, weight: .bold)).foregroundStyle(PlayerStyle.dim)
+            if !compact { Text("BARS").font(.system(size: 7, weight: .bold)).foregroundStyle(PlayerStyle.dim) }
             Button { deck.zoom(direction: 1) } label: { Image(systemName: "minus") }
-                .buttonStyle(ControlButtonStyle(width: 24, height: 24))
+                .buttonStyle(ControlButtonStyle(width: 24, height: compact ? 18 : 24))
                 .disabled(deck.zoomBars >= (DetailZoom.steps.last ?? 64))
                 .help("Zoom out (-)")
         }

@@ -36,10 +36,20 @@ struct ContentView: View {
                     .help("Show the track filter")
                 }
                 ToolbarItem(placement: .navigation) {
-                    Toggle(isOn: Binding(get: { model.player.panelOpen }, set: { model.player.panelOpen = $0 })) {
-                        Label("Player", systemImage: "waveform")
+                    Menu {
+                        Picker("Layout", selection: Binding(get: { model.player.layout }, set: { model.player.layout = $0 })) {
+                            ForEach(PlayerLayout.allCases) { layout in
+                                Text("\(layout.label)  \u{2318}\(String(layout.keyEquivalent))").tag(layout)
+                            }
+                        }
+                        .pickerStyle(.inline)
+                    } label: {
+                        Label("Layout", systemImage: "rectangle.split.1x2")
                     }
-                    .help("Show the player")
+                    .help("Choose how many players are shown (\u{2318}7 to \u{2318}0)")
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    MasterLevelControl(master: model.player.master)
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Toggle(isOn: Binding(get: { model.infoPanelOpen }, set: { model.infoPanelOpen = $0 })) {
@@ -72,14 +82,28 @@ struct SidebarView: View {
 struct DetailView: View {
     @Environment(AppModel.self) private var model
 
+    /// What the browser keeps under the player (table, filter bar, status line): the panel gives
+    /// way before the window has to grow, or the window and its content chase each other.
+    static let browserReserve = 170.0
+
     var body: some View {
         @Bindable var model = model
         // Not a VSplitView: an AppKit view inside its first pane (the detail waveform) sends the
         // split view's size constraints into an endless update. The divider is drawn here instead.
+        GeometryReader { geometry in
         VStack(spacing: 0) {
-            if model.player.panelOpen {
-                DeckPanel(deck: model.player.deckA, player: model.player, palette: model.waveformPalette)
-                    .frame(height: model.player.panelHeight)
+            if model.player.layout != .browser {
+                Group {
+                    switch model.player.layout {
+                    case .two:
+                        DualDeckPanel(player: model.player, palette: model.waveformPalette)
+                    case .simple:
+                        SimplePlayerPanel(player: model.player, deck: model.player.deckA, palette: model.waveformPalette)
+                    case .one, .browser:
+                        DeckPanel(deck: model.player.deckA, player: model.player, palette: model.waveformPalette)
+                    }
+                }
+                .frame(height: min(model.player.currentPanelHeight, max(geometry.size.height - Self.browserReserve, 120)))
                 PanelDivider(player: model.player)
             }
             VStack(spacing: 0) {
@@ -99,6 +123,7 @@ struct DetailView: View {
                 StatusLine()
             }
             .frame(minHeight: 120)
+        }
         }
         .inspector(isPresented: $model.infoPanelOpen) {
             InfoPanelView(model: model.info)
@@ -158,12 +183,33 @@ struct PanelDivider: View {
                     .gesture(
                         DragGesture(minimumDistance: 1, coordinateSpace: .global)
                             .onChanged { value in
-                                let start = startHeight ?? player.panelHeight
+                                let start = startHeight ?? player.currentPanelHeight
                                 startHeight = start
-                                player.panelHeight = min(max(start + value.translation.height, PlayerModel.panelHeightRange.lowerBound), PlayerModel.panelHeightRange.upperBound)
+                                player.currentPanelHeight = start + value.translation.height
                             }
                             .onEnded { _ in startHeight = nil })
             }
             .accessibilityLabel("Player size")
+    }
+}
+
+/// The master level in the toolbar: 0 to 10 on the taper, 11 past the notch.
+struct MasterLevelControl: View {
+    let master: MasterModel
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "speaker.wave.2.fill").foregroundStyle(.secondary)
+            Slider(
+                value: Binding(get: { master.reading }, set: { master.setReading($0) }), in: 0...MasterScale.full
+            )
+            .frame(width: 84)
+            .controlSize(.small)
+            Text(MasterScale.label(master.reading))
+                .font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 16, alignment: .trailing)
+        }
+        .help("Master level (10 is the default, 11 is +2 dB)")
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Master level")
     }
 }

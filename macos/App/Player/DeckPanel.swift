@@ -39,7 +39,7 @@ struct DeckPanel: View {
         }
         .background(PlayerStyle.background)
         .environment(\.colorScheme, .dark)
-        .overlay(alignment: .bottomLeading) { noticeBanner }
+        .overlay(alignment: .bottomLeading) { NoticeBanner(player: player) }
     }
 
     private var content: some View {
@@ -67,22 +67,6 @@ struct DeckPanel: View {
             TempoColumn(deck: deck)
         }
         .padding(12)
-    }
-
-    @ViewBuilder private var noticeBanner: some View {
-        do {
-            if let notice = player.notice {
-                HStack(spacing: 6) {
-                    Text(notice).lineLimit(1)
-                    Button("Dismiss", systemImage: "xmark.circle.fill") { player.dismissNotice() }
-                        .labelStyle(.iconOnly).buttonStyle(.plain)
-                }
-                .font(.caption)
-                .padding(.horizontal, 8).padding(.vertical, 3)
-                .background(Color.red.opacity(0.35), in: .rect(cornerRadius: 4))
-                .padding(6)
-            }
-        }
     }
 
     // MARK: Header: track info, key, BPM
@@ -135,7 +119,7 @@ struct DeckPanel: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 10) {
                     CueButton(deck: deck)
-                    PlayButton(deck: deck)
+                    PlayButton(deck: deck, toggle: { player.togglePlay(deck.deck) })
                     PadRow(deck: deck)
                     MemoryCueButtons(deck: deck)
                     Spacer(minLength: 8)
@@ -153,7 +137,7 @@ struct DeckPanel: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 10) {
                     CueButton(deck: deck)
-                    PlayButton(deck: deck)
+                    PlayButton(deck: deck, toggle: { player.togglePlay(deck.deck) })
                     PadRow(deck: deck)
                     Spacer(minLength: 8)
                     TimeReadout(deck: deck)
@@ -178,35 +162,56 @@ struct DeckPanel: View {
 
 // MARK: - Pieces
 
-private struct Sleeve: View {
+/// The player's transient message (the output could not open, a load failed).
+struct NoticeBanner: View {
+    let player: PlayerModel
+
+    var body: some View {
+        if let notice = player.notice {
+            HStack(spacing: 6) {
+                Text(notice).lineLimit(1)
+                Button("Dismiss", systemImage: "xmark.circle.fill") { player.dismissNotice() }
+                    .labelStyle(.iconOnly).buttonStyle(.plain)
+            }
+            .font(.caption)
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(Color.red.opacity(0.35), in: .rect(cornerRadius: 4))
+            .padding(6)
+        }
+    }
+}
+
+struct Sleeve: View {
     let deck: DeckModel
+    var edge: CGFloat = 120
 
     var body: some View {
         ZStack {
             if let image = deck.artwork {
                 Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
             } else {
-                Image(nsImage: RecordArt.image(hue: deck.track?.artworkHue ?? 210, edge: 120))
+                Image(nsImage: RecordArt.image(hue: deck.track?.artworkHue ?? 210, edge: edge))
                     .resizable()
                     .opacity(deck.track == nil ? 0.25 : 1)
             }
         }
-        .frame(width: 120, height: 120)
+        .frame(width: edge, height: edge)
         .clipShape(.rect(cornerRadius: 3))
         .overlay(RoundedRectangle(cornerRadius: 3).stroke(.white.opacity(0.12), lineWidth: 0.5))
         .accessibilityLabel("Artwork")
     }
 }
 
-private struct BpmReadout: View {
+struct BpmReadout: View {
     let deck: DeckModel
     let track: DeckTrack
+    var compact = false
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 1) {
             HStack(alignment: .firstTextBaseline, spacing: 3) {
                 Text(PlayerFormat.bpm(x100: deck.playingBpmX100))
-                    .font(.system(size: 22, weight: .semibold, design: .rounded).monospacedDigit())
+                    .font(.system(size: compact ? 16 : 22, weight: .semibold, design: .rounded).monospacedDigit())
                     .foregroundStyle(PlayerStyle.text)
                 Text("BPM").font(.system(size: 9, weight: .bold)).foregroundStyle(PlayerStyle.dim)
             }
@@ -223,8 +228,9 @@ private struct BpmReadout: View {
     }
 }
 
-private struct TimeReadout: View {
+struct TimeReadout: View {
     let deck: DeckModel
+    var compact = false
 
     var body: some View {
         // Redrawn per display frame while playing; the readout only changes by the tenth.
@@ -235,10 +241,10 @@ private struct TimeReadout: View {
             let secondary = deck.timeMode == .elapsed ? PlayerFormat.remaining(total: total, position: position) : PlayerFormat.elapsed(position)
             VStack(alignment: .trailing, spacing: 0) {
                 Text(primary)
-                    .font(.system(size: 28, weight: .medium, design: .rounded).monospacedDigit())
+                    .font(.system(size: compact ? 19 : 28, weight: .medium, design: .rounded).monospacedDigit())
                     .foregroundStyle(PlayerStyle.text)
                 Text(secondary)
-                    .font(.system(size: 11, weight: .regular).monospacedDigit())
+                    .font(.system(size: compact ? 9 : 11, weight: .regular).monospacedDigit())
                     .foregroundStyle(PlayerStyle.dim)
             }
         }
@@ -250,8 +256,9 @@ private struct TimeReadout: View {
 }
 
 /// CUE is held, not clicked: down is the press, up the release (see `CueMachine`).
-private struct CueButton: View {
+struct CueButton: View {
     let deck: DeckModel
+    var compact = false
     @State private var pressed = false
 
     var body: some View {
@@ -259,7 +266,7 @@ private struct CueButton: View {
         Text("CUE")
             .font(.system(size: 12, weight: .bold))
             .foregroundStyle(held ? .black : PlayerStyle.cue)
-            .frame(width: 56, height: 40)
+            .frame(width: compact ? 44 : 56, height: compact ? 32 : 40)
             .background(held ? PlayerStyle.cue : PlayerStyle.button, in: .rect(cornerRadius: 4))
             .overlay(RoundedRectangle(cornerRadius: 4).stroke(PlayerStyle.cue.opacity(0.6), lineWidth: 1))
             .opacity(deck.isLoaded ? 1 : 0.4)
@@ -281,17 +288,21 @@ private struct CueButton: View {
     }
 }
 
-private struct PlayButton: View {
+struct PlayButton: View {
     let deck: DeckModel
+    var compact = false
+    /// Routes the press through the player (BEAT SYNC can hold it for the beat); the deck's own
+    /// toggle otherwise.
+    var toggle: (() -> Void)?
 
     var body: some View {
         Button {
-            deck.togglePlay()
+            if let toggle { toggle() } else { deck.togglePlay() }
         } label: {
             Image(systemName: deck.isPlaying ? "pause.fill" : "play.fill")
-                .font(.system(size: 16, weight: .bold))
+                .font(.system(size: compact ? 14 : 16, weight: .bold))
                 .foregroundStyle(deck.isPlaying ? PlayerStyle.playing : PlayerStyle.text)
-                .frame(width: 56, height: 40)
+                .frame(width: compact ? 44 : 56, height: compact ? 32 : 40)
                 .background(PlayerStyle.button, in: .rect(cornerRadius: 4))
                 .overlay(
                     RoundedRectangle(cornerRadius: 4)
@@ -307,7 +318,7 @@ private struct PlayButton: View {
 
 // MARK: - Tempo
 
-private struct TempoColumn: View {
+struct TempoColumn: View {
     let deck: DeckModel
 
     var body: some View {

@@ -52,8 +52,8 @@ enum ContextMenus {
     }
 
     /// Right-clicking a track, top to bottom as `TRACK_MENU` has it. Show in Finder, Show
-    /// information and Load track to player 1 are live; player 2 arrives with the dual decks,
-    /// the rest are edits (Phase 4).
+    /// information and Load track to player 1 and 2 are live (player 2 is refused outside the
+    /// 2 PLAYER layout); the rest are edits (Phase 4).
     static func trackMenu(_ context: TrackContext) -> [MenuRow] {
         let hasSelection = context.selectionCount > 0
         var rows: [MenuRow] = [
@@ -62,7 +62,7 @@ enum ContextMenus {
                     title: "Load", command: nil,
                     submenu: [
                         context.selectionCount == 1 ? live("Load track to player 1", .loadToDeck(.a)) : grey("Load track to player 1"),
-                        grey("Load track to player 2"),
+                        context.selectionCount == 1 ? live("Load track to player 2", .loadToDeck(.b)) : grey("Load track to player 2"),
                     ])),
             .separator,
             grey("Import To Collection"),
