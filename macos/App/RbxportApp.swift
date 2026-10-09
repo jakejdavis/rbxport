@@ -102,6 +102,17 @@ struct RbxportApp: App {
             model.player.persistsLayout = false
             model.player.layout = layout
         }
+        // RBXPORT_WINDOW_SIZE=1280x900 sizes the main window (the saved frame otherwise wins).
+        if let text = env["RBXPORT_WINDOW_SIZE"] {
+            let parts = text.split(separator: "x").compactMap { Double($0) }
+            if parts.count == 2 {
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(800))
+                    NSApp.windows.first { $0.isVisible && $0.title != "Audio" }?
+                        .setContentSize(NSSize(width: parts[0], height: parts[1]))
+                }
+            }
+        }
         if env["RBXPORT_OPEN_SETTINGS"] == "1" {
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(2))
