@@ -32,6 +32,14 @@ struct TrackTable: NSViewRepresentable {
         table.onReturn = { [weak coordinator = context.coordinator] shift in coordinator?.loadSelectedToDeck(deck: shift ? .b : .a) }
         table.onEscape = { [weak model] in model?.clearSearch() }
         table.menuProvider = { [weak coordinator = context.coordinator] row in coordinator?.menu(forRow: row) }
+        table.onDelete = { [weak model] in
+            // Delete takes the selection out of the open playlist. A locked library refuses with its own message.
+            guard let model, model.openPlaylistID != nil, !model.selectedIDs.isEmpty else { return }
+            Task { await model.removeSelectionFromPlaylist() }
+        }
+        table.registerForDraggedTypes([.rbxportTracks])
+        table.setDraggingSourceOperationMask([.copy, .move], forLocal: true)
+        table.draggingDestinationFeedbackStyle = .gap
         context.coordinator.table = table
         context.coordinator.installHeaderMenu()
 
@@ -278,6 +286,40 @@ struct TrackTable: NSViewRepresentable {
             return MenuBuilder.menu(rows) { command in model.runTrackMenu(command) }
         }
 
+        // MARK: Dragging tracks
+
+        func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
+            // Dragging only edits playlists, so a locked library drags nothing.
+            guard model.canEdit else { return nil }
+            let item = NSPasteboardItem()
+            // A row whose page is not loaded still takes part in the drag, as an empty placeholder.
+            item.setString(pager.peek(at: row)?.id ?? "", forType: .rbxportTracks)
+            return item
+        }
+
+        func tableView(
+            _ tableView: NSTableView, validateDrop info: NSDraggingInfo, proposedRow row: Int,
+            proposedDropOperation dropOperation: NSTableView.DropOperation
+        ) -> NSDragOperation {
+            // Reordering is the only drop a table takes: from itself, in a playlist shown in its own order.
+            guard model.canReorderRows, (info.draggingSource as? NSTableView) === tableView,
+                info.draggingPasteboard.availableType(from: [.rbxportTracks]) != nil
+            else { return [] }
+            tableView.setDropRow(row, dropOperation: .above)
+            return .move
+        }
+
+        func tableView(
+            _ tableView: NSTableView, acceptDrop info: NSDraggingInfo, row: Int,
+            dropOperation: NSTableView.DropOperation
+        ) -> Bool {
+            let ids = NSPasteboard.PasteboardType.trackIDs(from: info.draggingPasteboard)
+            guard !ids.isEmpty else { return false }
+            let model = model
+            Task { await model.reorderRows(carried: ids, insertionRow: row) }
+            return true
+        }
+
         // MARK: Data source and cells
 
         func numberOfRows(in tableView: NSTableView) -> Int { pager.rowCount }
@@ -464,6 +506,8 @@ final class TrackNSTableView: NSTableView {
     /// Return loads onto deck A; Shift-Return (the flag) onto deck B.
     var onReturn: ((Bool) -> Void)?
     var onEscape: (() -> Void)?
+    /// Delete or forward-delete.
+    var onDelete: (() -> Void)?
     /// The menu for a right-click on a row (-1 when it hit no row).
     var menuProvider: ((Int) -> NSMenu?)?
 
@@ -478,6 +522,7 @@ final class TrackNSTableView: NSTableView {
         switch (event.keyCode, plain) {
         case (36, []), (76, []): onReturn?(extend)
         case (53, []): onEscape?()
+        case (51, []), (117, []): onDelete?()
         case (115, []), (126, .command): move(to: 0, extending: extend)  // Home, Cmd-Up
         case (119, []), (125, .command): move(to: numberOfRows - 1, extending: extend)  // End, Cmd-Down
         case (116, []): page(up: true, extending: extend)

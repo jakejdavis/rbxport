@@ -18,7 +18,11 @@ pub fn library_summary(state: &AppState) -> AppResult<LibrarySummaryDto> {
     let is_real_install = state.location()?.is_real_install;
     // The UI refreshes this while open; startup's process state is stale
     // as soon as rekordbox launches or exits. Fixtures keep their own gate.
-    let read_only = if is_real_install {
+    // The native app has one answer: the write gate itself. The Tauri shell keeps
+    // its own rule below (which honours RBX_DISABLE_READ_ONLY and ignores protection).
+    let read_only = if state.native_gate_enabled() {
+        state.write_gate().is_some()
+    } else if is_real_install {
         rbl_db::is_rekordbox_running() && !rbl_db::unsafe_writes_enabled()
     } else {
         read_only

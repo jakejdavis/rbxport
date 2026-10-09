@@ -5,7 +5,7 @@
 
 use serde::{Serialize, Serializer};
 
-use crate::dto::{EditHistoryDto, LibraryProblemDto};
+use crate::dto::{EditHistoryDto, ExportProgressDto, LibraryProblemDto};
 
 /// Something that happened which a front end may want to redraw for.
 #[derive(Debug, Clone)]
@@ -20,6 +20,16 @@ pub enum AppEvent {
     TagListChanged(u32),
     /// Undo or redo became (un)available.
     EditHistoryChanged(EditHistoryDto),
+    /// A track's cues changed; the payload is the track id.
+    CuesChanged(String),
+    /// A track's beat grid changed; the payload is the track id.
+    GridChanged(String),
+    /// A track's analysis changed; the payload is the track id.
+    AnalysisChanged(String),
+    /// Mounted volumes changed. Payload: none.
+    DevicesChanged,
+    /// Progress of an XML / iTunes import.
+    ImportProgress(ExportProgressDto),
 }
 
 impl AppEvent {
@@ -31,6 +41,11 @@ impl AppEvent {
             Self::LibraryChanged(_) => "library:changed",
             Self::TagListChanged(_) => "tag-list:changed",
             Self::EditHistoryChanged(_) => "edit-history:changed",
+            Self::CuesChanged(_) => "cues:changed",
+            Self::GridChanged(_) => "grid:changed",
+            Self::AnalysisChanged(_) => "analysis:changed",
+            Self::DevicesChanged => "devices:changed",
+            Self::ImportProgress(_) => "import:progress",
         }
     }
 }
@@ -40,10 +55,12 @@ impl AppEvent {
 impl Serialize for AppEvent {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
-            Self::LibraryReady => serializer.serialize_unit(),
+            Self::LibraryReady | Self::DevicesChanged => serializer.serialize_unit(),
             Self::LibraryProblem(problem) => problem.serialize(serializer),
             Self::LibraryChanged(generation) | Self::TagListChanged(generation) => generation.serialize(serializer),
             Self::EditHistoryChanged(history) => history.serialize(serializer),
+            Self::CuesChanged(track) | Self::GridChanged(track) | Self::AnalysisChanged(track) => track.serialize(serializer),
+            Self::ImportProgress(progress) => progress.serialize(serializer),
         }
     }
 }
@@ -71,6 +88,13 @@ mod tests {
         assert_eq!(serde_json::to_string(&AppEvent::LibraryReady).unwrap(), "null");
         assert_eq!(serde_json::to_string(&AppEvent::LibraryChanged(7)).unwrap(), "7");
         assert_eq!(AppEvent::TagListChanged(1).name(), "tag-list:changed");
+        assert_eq!(serde_json::to_string(&AppEvent::DevicesChanged).unwrap(), "null");
+        assert_eq!(serde_json::to_string(&AppEvent::GridChanged("5".into())).unwrap(), "\"5\"");
+        assert_eq!(AppEvent::CuesChanged(String::new()).name(), "cues:changed");
+        assert_eq!(AppEvent::AnalysisChanged(String::new()).name(), "analysis:changed");
+        let progress = AppEvent::ImportProgress(ExportProgressDto { path: "p".into(), state: "writing", done: 1, total: 2, title: String::new() });
+        assert_eq!(progress.name(), "import:progress");
+        assert_eq!(serde_json::to_string(&progress).unwrap(), r#"{"path":"p","state":"writing","done":1,"total":2,"title":""}"#);
         let problem = AppEvent::LibraryProblem(LibraryProblemDto::Failed { message: "x".into() });
         assert_eq!(serde_json::to_string(&problem).unwrap(), r#"{"kind":"failed","message":"x"}"#);
     }

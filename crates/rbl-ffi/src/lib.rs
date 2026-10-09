@@ -5,7 +5,7 @@
 //! and enums Swift can use (no JSON, no stringly kinds). All logic lives in
 //! `rbl-app`; the only code here is conversion.
 //!
-//! The installed library is only ever opened read-only, and so are fixtures.
+//! Reads open the library read-only; every edit passes the write gate in `rbl_app::edits`.
 
 // UniFFI's generated scaffolding is `unsafe` (extern "C" entry points); the
 // workspace denies it, and `lints.workspace = true` cannot be partly overridden
@@ -31,7 +31,7 @@ pub use types::{
     FilterValues, PlaylistFileFormat, TagCategory, TrackFilter, ExtraFields, HotCue, LibraryProblem, LibrarySummary, LoadOutcome, NodeKind, Row,
     SearchField, SortKey,
     TrackDetails, TrackLookups, MyTag, MyTagCategory, WaveformKind,
-    TrackSource, TreeNode, ViewHandle, ViewSpec,
+    TrackSource, TreeNode, ViewHandle, ViewSpec, ImportProgress, SmartCondition, SmartLogic, SmartRule,
 };
 
 uniffi::setup_scaffolding!();

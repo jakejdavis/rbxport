@@ -28,6 +28,9 @@ struct SidebarOutline: NSViewRepresentable {
         outline.dataSource = context.coordinator
         outline.delegate = context.coordinator
         outline.menuProvider = { [weak coordinator = context.coordinator] node in coordinator?.menu(for: node) }
+        outline.onRename = { [weak coordinator = context.coordinator] in coordinator?.renameSelected() }
+        outline.registerForDraggedTypes([.rbxportSidebarNode, .rbxportTracks])
+        outline.setDraggingSourceOperationMask(.move, forLocal: true)
         context.coordinator.outline = outline
         model.sidebar.onNodeReloaded = { [weak coordinator = context.coordinator] node in
             coordinator?.nodeReloaded(node)
@@ -47,18 +50,75 @@ struct SidebarOutline: NSViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate {
+    final class Coordinator: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSTextFieldDelegate {
         weak var outline: SidebarNSOutlineView?
         let model: AppModel
         private var sidebar: SidebarModel { model.sidebar }
         private var shownVersion = -1
         // Programmatic expansion and selection must not feed back into the model.
         private var applying = false
+        /// The row whose name is being edited, and whether Escape was pressed.
+        private var renamingNode: SidebarNode?
+        private var renameCancelled = false
 
         init(model: AppModel) { self.model = model }
 
         func update(version: Int, selectedID: String?) {
             if version != shownVersion { reload() } else { syncSelection() }
+            if let id = sidebar.renameRequest {
+                // After this update: starting an edit changes first responder and layout.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.sidebar.renameRequest == id else { return }
+                    self.sidebar.renameRequest = nil
+                    if let node = self.sidebar.node(withID: id) { self.beginRename(node) }
+                }
+            }
+        }
+
+        // MARK: Inline rename
+
+        func renameSelected() {
+            guard model.canEdit, let outline, outline.selectedRow >= 0,
+                let node = outline.item(atRow: outline.selectedRow) as? SidebarNode, node.isEditableItem
+            else { return }
+            beginRename(node)
+        }
+
+        /// Puts the row's name into a text field. Enter or clicking away commits, Escape restores.
+        func beginRename(_ node: SidebarNode) {
+            guard let outline, node.isEditableItem else { return }
+            var ancestor = node.parent
+            applying = true
+            while let current = ancestor, !current.isSection {
+                outline.expandItem(current)
+                ancestor = current.parent
+            }
+            applying = false
+            let row = outline.row(forItem: node)
+            guard row >= 0, let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: true) as? SidebarCellView
+            else { return }
+            outline.scrollRowToVisible(row)
+            renamingNode = node
+            renameCancelled = false
+            cell.beginEditing(delegate: self)
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            guard selector == #selector(NSResponder.cancelOperation(_:)) else { return false }
+            renameCancelled = true
+            outline?.window?.makeFirstResponder(outline)
+            return true
+        }
+
+        func controlTextDidEndEditing(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField, let node = renamingNode else { return }
+            renamingNode = nil
+            let text = field.stringValue
+            (field.superview as? SidebarCellView)?.endEditing(restoring: node.name)
+            outline?.window?.makeFirstResponder(outline)
+            guard !renameCancelled else { return }
+            let model = model
+            Task { await model.rename(node, to: text) }
         }
 
         func reload() {
@@ -171,15 +231,68 @@ struct SidebarOutline: NSViewRepresentable {
             sidebar.setExpanded(node, false)
         }
 
+        // MARK: Drag and drop
+
+        func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any) -> NSPasteboardWriting? {
+            guard model.canEdit, let node = item as? SidebarNode, node.isEditableItem else { return nil }
+            let pasteboardItem = NSPasteboardItem()
+            pasteboardItem.setString(node.id, forType: .rbxportSidebarNode)
+            return pasteboardItem
+        }
+
+        func outlineView(
+            _ outlineView: NSOutlineView, validateDrop info: NSDraggingInfo, proposedItem item: Any?,
+            proposedChildIndex index: Int
+        ) -> NSDragOperation {
+            guard model.canEdit else { return [] }
+            let pasteboard = info.draggingPasteboard
+            if let id = pasteboard.string(forType: .rbxportSidebarNode), let dragged = sidebar.node(withID: id) {
+                guard let plan = sidebar.movePlan(dragging: dragged, onto: item as? SidebarNode, childIndex: index) else {
+                    return []
+                }
+                outlineView.setDropItem(plan.outlineParent, dropChildIndex: plan.outlineIndex)
+                return .move
+            }
+            if pasteboard.availableType(from: [.rbxportTracks]) != nil {
+                // Tracks land on an ordinary playlist (a smart one is its rule; a folder holds none).
+                guard let node = item as? SidebarNode, node.kind == .playlist, index == NSOutlineViewDropOnItemIndex
+                else { return [] }
+                return .copy
+            }
+            return []
+        }
+
+        func outlineView(
+            _ outlineView: NSOutlineView, acceptDrop info: NSDraggingInfo, item: Any?, childIndex index: Int
+        ) -> Bool {
+            let pasteboard = info.draggingPasteboard
+            let model = model
+            if let id = pasteboard.string(forType: .rbxportSidebarNode), let dragged = sidebar.node(withID: id),
+                let plan = sidebar.movePlan(dragging: dragged, onto: item as? SidebarNode, childIndex: index)
+            {
+                Task { await model.move(dragged, to: plan) }
+                return true
+            }
+            let tracks = NSPasteboard.PasteboardType.trackIDs(from: pasteboard)
+            if !tracks.isEmpty, let node = item as? SidebarNode, node.kind == .playlist, let playlist = node.libraryID {
+                Task { await model.addToPlaylist(playlist, trackIDs: tracks) }
+                return true
+            }
+            return false
+        }
+
         // MARK: Context menu
 
         func menu(for node: SidebarNode) -> NSMenu? {
-            guard let rows = ContextMenus.treeMenu(for: node.kind) else { return nil }
+            guard let rows = ContextMenus.treeMenu(for: node.kind, editable: model.canEdit) else { return nil }
             return MenuBuilder.menu(rows) { [weak self] command in self?.run(command, on: node) }
         }
 
         private func run(_ command: MenuCommand, on node: SidebarNode) {
-            guard case .exportPlaylist(let format) = command else { return }
+            guard case .exportPlaylist(let format) = command else {
+                model.runTreeMenu(command, on: node)
+                return
+            }
             let panel = NSSavePanel()
             let ext = format == .txt ? "txt" : "m3u8"
             panel.nameFieldStringValue = "\(node.name).\(ext)"
@@ -240,6 +353,15 @@ final class ClosureMenuItem: NSMenuItem {
 /// `NSOutlineView` that asks for a menu per row, and does not select what it right-clicks.
 final class SidebarNSOutlineView: NSOutlineView {
     var menuProvider: ((SidebarNode) -> NSMenu?)?
+    /// Return or F2 on the selected row.
+    var onRename: (() -> Void)?
+
+    override func keyDown(with event: NSEvent) {
+        switch event.keyCode {
+        case 36, 76, 120: onRename?()  // Return, Enter, F2
+        default: super.keyDown(with: event)
+        }
+    }
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let row = row(at: convert(event.locationInWindow, from: nil))
@@ -295,6 +417,24 @@ final class SidebarCellView: NSTableCellView {
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// Turns the name into an editable field with its text selected.
+    @MainActor
+    func beginEditing(delegate: NSTextFieldDelegate) {
+        label.isEditable = true
+        label.isSelectable = true
+        label.delegate = delegate
+        window?.makeFirstResponder(label)
+        label.currentEditor()?.selectAll(nil)
+    }
+
+    @MainActor
+    func endEditing(restoring name: String) {
+        label.isEditable = false
+        label.isSelectable = false
+        label.delegate = nil
+        label.stringValue = name
+    }
 
     @MainActor
     func show(_ node: SidebarNode, count shown: UInt32?) {

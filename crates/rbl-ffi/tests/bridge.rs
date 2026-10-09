@@ -352,3 +352,33 @@ fn details_lookups_waveform_and_artwork_cross_the_bridge() {
     assert!(core.artwork(track_id(0)).is_none());
     assert!(core.artwork(track_id(3)).is_none());
 }
+
+#[test]
+fn editing_is_locked_by_default_and_opens_with_the_protection_setting() {
+    let (_dir, core, events) = core();
+    assert!(core.summary().unwrap().read_only, "Library Protection is on by default");
+    let refusal = core.write_refusal().unwrap();
+    assert!(refusal.starts_with("Editing is locked by Library Protection"));
+    let err = core.create_playlist("Nope".into(), "root".into()).unwrap_err();
+    assert!(matches!(err, FfiError::ReadOnly { ref message, .. } if *message == refusal));
+    assert_eq!(events.0.lock().unwrap().len(), 1, "a refusal emits nothing");
+
+    core.set_protect_library(false);
+    assert!(!core.summary().unwrap().read_only);
+    assert!(core.write_refusal().is_none());
+    let id = core.create_playlist("Fresh".into(), "root".into()).unwrap();
+    let tree = core.playlist_tree().unwrap();
+    assert!(tree.iter().any(|n| n.id == id && n.name == "Fresh"));
+    let tracks = vec![rbl_db::fixture::track_id(1), rbl_db::fixture::track_id(2)];
+    assert_eq!(core.add_tracks_to_playlist(id.clone(), tracks.clone()).unwrap(), 2);
+    let history = core.rename_playlist(id.clone(), "Renamed".into()).unwrap();
+    assert!(history.can_undo);
+    assert_eq!(history.undo_label.as_deref(), Some("Rename Playlist"));
+    let history = core.undo().unwrap();
+    assert!(history.can_redo && !history.can_undo);
+    assert!(core.playlist_tree().unwrap().iter().any(|n| n.name == "Fresh"));
+    assert!(matches!(core.move_playlist("nope".into(), "root".into(), None), Err(FfiError::Malformed { .. })));
+    let seen = events.0.lock().unwrap();
+    assert!(seen.iter().any(|e| matches!(e, LibraryEvent::EditHistoryChanged { .. })));
+    assert!(seen.iter().any(|e| matches!(e, LibraryEvent::LibraryChanged { .. })));
+}

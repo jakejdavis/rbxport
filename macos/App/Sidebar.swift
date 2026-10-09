@@ -130,6 +130,11 @@ final class SidebarModel {
     /// Bumped on every structural change; the outline reloads when it moves.
     private(set) var version = 0
     private(set) var expansion: [String: Bool]
+    /// The id of a row that should start an inline rename (a new playlist, F2). The outline
+    /// takes it and clears it.
+    var renameRequest: String? {
+        didSet { if renameRequest != nil { version += 1 } }
+    }
 
     var showChildCounts: Bool {
         didSet {

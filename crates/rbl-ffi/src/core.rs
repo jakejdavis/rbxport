@@ -8,14 +8,14 @@ use std::time::Instant;
 use rbl_app::dto::LibraryProblemDto;
 use rbl_app::error::run_command;
 use rbl_app::state::AppState;
-use rbl_app::{browse, details, explorer, media, startup, track_data, AppError, AppEvent, AppResult, EventSink};
+use rbl_app::{browse, details, edits, explorer, media, startup, track_data, AppError, AppEvent, AppResult, EventSink};
 use rbl_db::{Library as Db, LibraryLocation, OpenMode};
 
 use crate::error::FfiError;
 use crate::events::{EventListener, ListenerSink};
 use crate::playback::{Playback, PlaybackListener};
 use crate::types::{
-    Beat, Cue, Phrase, Device, ExplorerChildren, ExplorerRoot, ExtraColumn, FilterValues, LibraryProblem, PlaylistFileFormat, LibrarySummary, LoadOutcome, Row, TrackDetails, TrackLookups, TreeNode, ViewHandle, ViewSpec, WaveformKind,
+    Beat, Cue, Phrase, EditHistory, SmartRule, Device, ExplorerChildren, ExplorerRoot, ExtraColumn, FilterValues, LibraryProblem, PlaylistFileFormat, LibrarySummary, LoadOutcome, Row, TrackDetails, TrackLookups, TreeNode, ViewHandle, ViewSpec, WaveformKind,
 };
 
 /// Where `load_library` gets the library from.
@@ -54,7 +54,7 @@ impl Core {
             rbl_db::fixture::build(dir, rbl_db::fixture::Shape::default())
                 .map_err(|e| internal("cannot build the fixture", &e))?
         };
-        // Read-only, always: this crate has no path that opens read-write.
+        // Reads are read-only; edits open a writer per edit, behind `rbl_app::edits`' gate.
         let db = Db::open(location.clone(), OpenMode::ReadOnly).map_err(|e| internal("cannot open", &e))?;
         let (library, _) = rbl_index::load(&db).map_err(|e| internal("cannot index", &e))?;
         let load_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -70,8 +70,10 @@ impl Core {
     /// `load_library`). `cache_dir` holds the snapshot cache; `None` disables it.
     #[uniffi::constructor]
     pub fn new(listener: Arc<dyn EventListener>, cache_dir: Option<String>) -> Arc<Self> {
+        let state = Arc::new(AppState::new());
+        state.enable_native_gate();
         Arc::new(Self {
-            state: Arc::new(AppState::new()),
+            state,
             sink: ListenerSink(listener),
             source: Source::Installed { cache_dir: cache_dir.map(PathBuf::from) },
         })
@@ -81,8 +83,10 @@ impl Core {
     #[uniffi::constructor]
     pub fn with_fixture(listener: Arc<dyn EventListener>, dir: String) -> Arc<Self> {
         let dir = PathBuf::from(dir);
+        let state = Arc::new(AppState::with_backups(dir.join("backups")));
+        state.enable_native_gate();
         Arc::new(Self {
-            state: Arc::new(AppState::with_backups(dir.join("backups"))),
+            state,
             sink: ListenerSink(listener),
             source: Source::Fixture { dir },
         })
@@ -233,5 +237,97 @@ impl Core {
     /// A track's artwork image file, or `None` (no artwork, missing file, refused path, over 8 MiB).
     pub fn artwork(&self, track_id: String) -> Option<Vec<u8>> {
         media::artwork_bytes(&self.state, &track_id)
+    }
+
+    // ---- the write gate and edits. Every one goes through `rbl_app::edits`.
+
+    /// Library Protection, as the app's setting stands. On by default (as in the
+    /// React app); turning it off is the only way the gate opens for a fixture.
+    pub fn set_protect_library(&self, protect: bool) {
+        self.state.set_protect_library(protect);
+    }
+
+    /// True when the loaded library is a generated fixture (never the installed one).
+    /// Developer hooks that write refuse to run unless this holds.
+    pub fn is_fixture_library(&self) -> bool {
+        self.state.location().is_ok_and(|l| !l.is_real_install)
+    }
+
+    /// Why editing is locked right now (the message to show), or `None` when it is not.
+    pub fn write_refusal(&self) -> Option<String> {
+        self.state.write_gate().map(|r| r.message().to_owned())
+    }
+
+    /// The undo/redo state and labels as they stand.
+    pub fn edit_history(&self) -> EditHistory {
+        edits::edit_history(&self.state).into()
+    }
+
+    pub fn undo(&self) -> Result<EditHistory, FfiError> {
+        ffi("undo", || edits::undo(&self.state, &self.sink)).map(Into::into)
+    }
+
+    pub fn redo(&self) -> Result<EditHistory, FfiError> {
+        ffi("redo", || edits::redo(&self.state, &self.sink)).map(Into::into)
+    }
+
+    /// Makes a playlist under `parent` (`"root"` for the top level); returns its id.
+    pub fn create_playlist(&self, name: String, parent: String) -> Result<String, FfiError> {
+        ffi("create_playlist", || edits::create_playlist(&self.state, &self.sink, &name, &parent))
+    }
+
+    pub fn create_folder(&self, name: String, parent: String) -> Result<String, FfiError> {
+        ffi("create_folder", || edits::create_folder(&self.state, &self.sink, &name, &parent))
+    }
+
+    pub fn create_smart_playlist(&self, name: String, parent: String, rule: SmartRule) -> Result<String, FfiError> {
+        ffi("create_smart_playlist", || edits::create_smart_playlist(&self.state, &self.sink, &name, &parent, &rule.into()))
+    }
+
+    /// A smart playlist's rule, for the editor.
+    pub fn smart_rule(&self, playlist_id: String) -> Result<SmartRule, FfiError> {
+        ffi("smart_rule", || edits::smart_rule(&self.state, &playlist_id)).map(Into::into)
+    }
+
+    /// Saves a smart playlist's rule and name in one step.
+    pub fn save_smart_playlist(&self, playlist_id: String, name: String, rule: SmartRule) -> Result<EditHistory, FfiError> {
+        ffi("save_smart_playlist", || edits::save_smart_playlist(&self.state, &self.sink, &playlist_id, &name, &rule.into()))
+            .map(Into::into)
+    }
+
+    pub fn rename_playlist(&self, id: String, name: String) -> Result<EditHistory, FfiError> {
+        ffi("rename_playlist", || edits::rename_playlist(&self.state, &self.sink, &id, &name)).map(Into::into)
+    }
+
+    /// Moves under `parent` at `index` among its children (`None`: the end).
+    pub fn move_playlist(&self, id: String, parent: String, index: Option<u32>) -> Result<EditHistory, FfiError> {
+        ffi("move_playlist", || edits::move_playlist(&self.state, &self.sink, &id, &parent, index.map(|i| i as usize)))
+            .map(Into::into)
+    }
+
+    pub fn delete_playlist(&self, id: String) -> Result<EditHistory, FfiError> {
+        ffi("delete_playlist", || edits::delete_playlist(&self.state, &self.sink, &id)).map(Into::into)
+    }
+
+    /// Sort Items: a folder's children by name, as one undo step.
+    pub fn sort_children(&self, parent: String) -> Result<EditHistory, FfiError> {
+        ffi("sort_children", || edits::sort_children(&self.state, &self.sink, &parent)).map(Into::into)
+    }
+
+    /// Appends tracks; returns how many were new to the playlist.
+    pub fn add_tracks_to_playlist(&self, playlist_id: String, track_ids: Vec<String>) -> Result<u32, FfiError> {
+        ffi("add_tracks_to_playlist", || edits::add_tracks_to_playlist(&self.state, &self.sink, &playlist_id, &track_ids))
+    }
+
+    pub fn remove_tracks_from_playlist(&self, playlist_id: String, track_ids: Vec<String>) -> Result<EditHistory, FfiError> {
+        ffi("remove_tracks_from_playlist", || {
+            edits::remove_tracks_from_playlist(&self.state, &self.sink, &playlist_id, &track_ids)
+        })
+        .map(Into::into)
+    }
+
+    /// Sets the playlist's full track order.
+    pub fn reorder_playlist(&self, playlist_id: String, track_ids: Vec<String>) -> Result<(), FfiError> {
+        ffi("reorder_playlist", || edits::reorder_playlist(&self.state, &self.sink, &playlist_id, &track_ids)).map(|_| ())
     }
 }

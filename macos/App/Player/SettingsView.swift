@@ -1,16 +1,55 @@
 import SwiftUI
 
-/// The Settings window. Phase 6 adds the other panes; this one is Audio.
+/// The Settings window. Phase 6 adds the other panes; so far General (Library Protection) and Audio.
 struct SettingsView: View {
     let player: PlayerModel
+    let model: AppModel
 
     var body: some View {
         TabView {
+            GeneralPane(model: model)
+                .tabItem { Label("General", systemImage: "gearshape") }
             AudioPane(player: player)
                 .tabItem { Label("Audio", systemImage: "speaker.wave.2") }
         }
         .frame(width: 520)
         .scenePadding()
+    }
+}
+
+/// Library Protection: the one setting the editing gate reads.
+struct GeneralPane: View {
+    let model: AppModel
+    @State private var confirmingUnlock = false
+
+    var body: some View {
+        Form {
+            Section("Library") {
+                Toggle(
+                    "Protect library",
+                    isOn: Binding(
+                        get: { model.protectLibrary },
+                        set: { on in
+                            if on { model.protectLibrary = true } else { confirmingUnlock = true }
+                        })
+                )
+                Text(
+                    "While on, rbxport will not change your rekordbox library: no playlists, tags or ratings are written, and undo is off. Turn it off to edit. rekordbox must be closed while you edit."
+                )
+                .font(.caption).foregroundStyle(.secondary)
+                if model.isReadOnly && !model.protectLibrary {
+                    Text("Editing is still locked while rekordbox is running. Quit rekordbox to enable editing.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .confirmationDialog("Turn off Library Protection?", isPresented: $confirmingUnlock) {
+            Button("Turn Off Protection", role: .destructive) { model.protectLibrary = false }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Edits are written to your rekordbox library. Make a backup first if you have not.")
+        }
     }
 }
 

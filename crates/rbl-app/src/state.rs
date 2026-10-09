@@ -26,6 +26,14 @@ pub struct AppState {
     pub analysis_write: parking_lot::Mutex<()>,
     pub backup_progress: parking_lot::Mutex<crate::backups::BackupProgress>,
     pub backup_sizes: parking_lot::Mutex<crate::backup_sizes::SizeCache>,
+    /// The native write gate (see [`crate::edits::gate_refusal`]). Off for the
+    /// Tauri shell, which keeps its own per-surface read-only rules.
+    pub(crate) native_gate: std::sync::atomic::AtomicBool,
+    /// Library Protection, as the shell last set it. Only consulted when
+    /// `native_gate` is on.
+    pub(crate) protect_library: std::sync::atomic::AtomicBool,
+    /// Whether rekordbox is running; replaceable so tests can simulate it.
+    pub(crate) running_probe: parking_lot::Mutex<fn() -> bool>,
     inner: RwLock<Inner>,
     /// Stable local home for recovery journals and the destination setting.
     backup_dir: std::path::PathBuf,
@@ -48,6 +56,8 @@ pub enum LibraryEdit {
     RemovePlaylistTracks(rbl_db::write::PlaylistTrackRemoval),
     Track(Vec<rbl_db::write::TrackEdit>),
     TrackTags(rbl_db::write::TrackTagEdit),
+    /// Several edits made as one (Sort Items): undone last-first, redone first-first.
+    Many(Vec<LibraryEdit>),
 }
 
 impl LibraryEdit {
@@ -57,6 +67,7 @@ impl LibraryEdit {
             Self::RemovePlaylistTracks(edit) => edit.is_empty(),
             Self::Track(edits) => edits.is_empty() || edits.iter().all(rbl_db::write::TrackEdit::is_empty),
             Self::TrackTags(edit) => edit.is_empty(),
+            Self::Many(edits) => edits.iter().all(Self::is_empty),
             Self::RenamePlaylist(_) | Self::MovePlaylist(_) => false,
         }
     }
@@ -159,6 +170,10 @@ impl AppState {
             analysis_write: parking_lot::Mutex::new(()),
             backup_progress: parking_lot::Mutex::new(crate::backups::BackupProgress::default()),
             backup_sizes: parking_lot::Mutex::new(crate::backup_sizes::SizeCache::default()),
+            native_gate: std::sync::atomic::AtomicBool::new(false),
+            // React's default (src/lib/preferences.ts protectLibrary).
+            protect_library: std::sync::atomic::AtomicBool::new(true),
+            running_probe: parking_lot::Mutex::new(rbl_db::is_rekordbox_running),
             inner: RwLock::new(Inner { next_view_id: 1, generation: 1, ..Inner::default() }),
             backup_dir,
             backup_destination: RwLock::new(backup_destination),
