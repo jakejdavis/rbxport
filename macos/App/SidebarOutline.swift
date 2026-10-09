@@ -466,7 +466,7 @@ final class SidebarCellView: NSTableCellView {
             return
         }
         icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.contentTintColor = .secondaryLabelColor
+        icon.contentTintColor = Self.iconTint(emphasized: false)
         icon.symbolConfiguration = .init(scale: .medium)
         imageView = icon
         count.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
@@ -502,6 +502,16 @@ final class SidebarCellView: NSTableCellView {
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// Source-list icons are accent-coloured, as in Music.app, and turn white on a selected
+    /// (emphasised) row so they do not vanish into the selection.
+    static func iconTint(emphasized: Bool) -> NSColor {
+        emphasized ? .alternateSelectedControlTextColor : .controlAccentColor
+    }
+
+    override var backgroundStyle: NSView.BackgroundStyle {
+        didSet { icon.contentTintColor = Self.iconTint(emphasized: backgroundStyle == .emphasized) }
+    }
 
     @objc private func ejectClicked() { onEject?() }
 

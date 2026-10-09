@@ -317,9 +317,9 @@ struct InfoTabView: View {
             if model.editable {
                 InfoEditForm(model: model, details: details).id(details.id)
             } else {
-                Form {
+                InfoList {
                     ForEach(InfoFormat.infoSections(details, myTagNames: model.myTagNames), id: \.title) { section in
-                        Section(section.title) {
+                        InfoSection(section.title) {
                             ForEach(section.facts, id: \.label) { fact in
                                 LabeledContent(fact.label) {
                                     Text(fact.value.isEmpty ? "\u{2014}" : fact.value)
@@ -330,7 +330,6 @@ struct InfoTabView: View {
                         }
                     }
                 }
-                .formStyle(.grouped)
             }
         } else {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -396,5 +395,52 @@ enum RecordArt {
         context.fillEllipse(in: circle(radius * 0.32))
         context.setFillColor(CGColor(gray: 0.08, alpha: 1))
         context.fillEllipse(in: circle(max(radius * 0.045, 0.75)))
+    }
+}
+
+/// The Info tab's native inspector layout: small grouped blocks of tight label/value rows.
+struct InfoList<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) { content }
+                .padding(.horizontal, 10).padding(.vertical, 8)
+        }
+        .labeledContentStyle(InfoRowStyle())
+        .controlSize(.small)
+        .font(.system(size: 12))
+    }
+}
+
+struct InfoSection<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+
+    init(_ title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary).padding(.leading, 4)
+            VStack(spacing: 0) { content }
+                .padding(.horizontal, 8)
+                .background(.quaternary.opacity(0.6), in: .rect(cornerRadius: 6))
+        }
+    }
+}
+
+/// One row: the label dim on the left, the value on the right.
+struct InfoRowStyle: LabeledContentStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            configuration.label.foregroundStyle(.secondary).lineLimit(1)
+                .frame(minWidth: 70, alignment: .leading).layoutPriority(1)
+            Spacer(minLength: 4)
+            configuration.content.multilineTextAlignment(.trailing)
+        }
+        .padding(.vertical, 3)
     }
 }

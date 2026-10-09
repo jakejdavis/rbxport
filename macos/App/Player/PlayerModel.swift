@@ -101,6 +101,16 @@ final class PlayerModel {
     @ObservationIgnored private var pump: Task<Void, Never>?
     @ObservationIgnored private var keyMonitor: Any?
     @ObservationIgnored private var resignObserver: NSObjectProtocol?
+    /// The browser window, the only one the deck keys belong to. Held by reference (set by the
+    /// content view), so it does not depend on any window's localised title.
+    @ObservationIgnored weak var mainWindow: NSWindow?
+
+    /// Deck keys act only when the event is in the main browser window: Settings, the Sync
+    /// Manager, the bug report window and sheets all have their own keys.
+    func acceptsKeys(in window: NSWindow?) -> Bool {
+        guard let window, let mainWindow else { return false }
+        return window === mainWindow
+    }
 
     /// Called for the sleeve of an empty simple player: load what the browser has selected.
     @ObservationIgnored var loadSelected: (() -> Void)?
@@ -469,11 +479,8 @@ final class PlayerModel {
     }
 
     private func handleKey(_ event: NSEvent) -> Bool {
-        // The Settings and Sync Manager windows have no decks: their keys are their own (and the
-        // Keyboard pane listens to them).
-        if let title = event.window?.title, title == "Sync Manager" || SettingsTab.allCases.contains(where: { $0.title == title }) {
-            return false
-        }
+        // Other windows have no decks: their keys are their own (and the Keyboard pane listens to them).
+        guard acceptsKeys(in: event.window) else { return false }
         let responder = event.window?.firstResponder
         let typing = responder is NSTextView || responder is NSTextField
         // The sidebar's outline uses left and right to fold its folders.

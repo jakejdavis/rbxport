@@ -193,3 +193,18 @@ final class WaveformService {
         fileprivate let inner: LazyLoader<Key, SendableImage>.Ticket
     }
 }
+
+/// What Show in Finder needs from the workspace; `NSWorkspace` is the real one, tests bring a fake.
+@MainActor
+protocol FileRevealing {
+    func activateFileViewerSelecting(_ fileURLs: [URL])
+}
+
+extension NSWorkspace: FileRevealing {}
+
+/// Selects `urls` in a Finder window (Show in Finder).
+@MainActor
+func revealInFileViewer(_ urls: [URL], using workspace: any FileRevealing = NSWorkspace.shared) {
+    guard !urls.isEmpty else { return }
+    workspace.activateFileViewerSelecting(urls)
+}
