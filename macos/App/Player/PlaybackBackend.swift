@@ -33,6 +33,21 @@ protocol PlaybackEngine: Sendable {
     /// Remembered and applied when the engine opens: never opens the output.
     func setTempo(deck: Deck, tempo: Float)
     func setMasterTempo(deck: Deck, on: Bool)
+    /// Semitones from the track's own key, applied when the engine opens if it is not yet.
+    func setKeyShift(deck: Deck, semitones: Int8)
+    /// A loop between two file positions (ms), switched on. A head past the out point goes back in.
+    func setLoop(deck: Deck, inMs: Double, outMs: Double)
+    /// RELOOP (back into the loop from its in point) and EXIT (out of it, the range kept).
+    func setLooping(deck: Deck, on: Bool)
+    func clearLoop(deck: Deck)
+    /// A drag on the waveform: audio follows `scrubTo` until `scrubEnd`.
+    func scrubBegin(deck: Deck)
+    func scrubTo(deck: Deck, ms: Double)
+    func scrubEnd(deck: Deck)
+    /// A click on every beat of the deck's grid while it plays.
+    func setMetronome(deck: Deck, on: Bool)
+    /// Which click (1 to 3) both decks' metronomes make.
+    func setMetronomeSound(_ sound: UInt8)
     /// Both decks now, for starting up and for after a reset.
     func state() -> PlaybackTick
 
@@ -103,6 +118,23 @@ final class RustPlayback: PlaybackEngine, @unchecked Sendable {
 
     func setMasterTempo(deck: Deck, on: Bool) {
         transport.async { [playback] in playback.setMasterTempo(deck: deck, on: on) }
+    }
+
+    func setKeyShift(deck: Deck, semitones: Int8) {
+        transport.async { [playback] in playback.setKeyShift(deck: deck, semitones: semitones) }
+    }
+    func setLoop(deck: Deck, inMs: Double, outMs: Double) {
+        transport.async { [playback] in playback.setLoop(deck: deck, inMs: inMs, outMs: outMs) }
+    }
+    func setLooping(deck: Deck, on: Bool) { transport.async { [playback] in playback.setLooping(deck: deck, on: on) } }
+    func clearLoop(deck: Deck) { transport.async { [playback] in playback.clearLoop(deck: deck) } }
+    func scrubBegin(deck: Deck) { transport.async { [playback] in playback.scrubBegin(deck: deck) } }
+    func scrubTo(deck: Deck, ms: Double) { transport.async { [playback] in playback.scrubTo(deck: deck, positionMs: ms) } }
+    func scrubEnd(deck: Deck) { transport.async { [playback] in playback.scrubEnd(deck: deck) } }
+    func setMetronome(deck: Deck, on: Bool) { transport.async { [playback] in playback.setMetronome(deck: deck, on: on) } }
+
+    func setMetronomeSound(_ sound: UInt8) {
+        transport.async { [playback] in playback.setMetronomeSound(sound: sound, volume: .large) }
     }
 
     func state() -> PlaybackTick { playback.state() }

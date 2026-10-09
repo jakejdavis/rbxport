@@ -22,9 +22,9 @@ mod types;
 pub use crate::core::Core;
 pub use error::FfiError;
 pub use events::{EventListener, LibraryEvent};
-pub use playback::{Deck, DeckEvent, DeckTick, Meters, Playback, PlaybackListener, PlaybackTick, PreviewState};
+pub use playback::{Deck, DeckEvent, DeckTick, MetronomeVolume, Meters, Playback, PlaybackListener, PlaybackTick, PreviewState};
 pub use types::{
-    BpmFilter, CountedBpm, CountedKey, Device, DeviceExport, EditHistory, ExplorerChildren, ExplorerRoot, ExtraColumn,
+    Beat, BpmFilter, Cue, Phrase, CountedBpm, CountedKey, Device, DeviceExport, EditHistory, ExplorerChildren, ExplorerRoot, ExtraColumn,
     FilterValues, PlaylistFileFormat, TagCategory, TrackFilter, ExtraFields, HotCue, LibraryProblem, LibrarySummary, LoadOutcome, NodeKind, Row,
     SearchField, SortKey,
     TrackDetails, TrackLookups, MyTag, MyTagCategory, WaveformKind,

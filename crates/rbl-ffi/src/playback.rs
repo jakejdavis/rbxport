@@ -13,6 +13,7 @@ use rbl_app::error::run_command;
 use rbl_app::player::{DeckEventDto, DeckTickDto, MeterDto, PlaybackSink, Player, TickDto};
 use rbl_app::preview::{Preview, PreviewStateDto};
 use rbl_app::state::AppState;
+use rbl_app::track_data;
 use rbl_app::{AppError, AppResult, ErrorKind};
 
 use crate::error::FfiError;
@@ -31,6 +32,14 @@ impl From<Deck> for rbl_deck::Deck {
             Deck::B => Self::B,
         }
     }
+}
+
+/// How loud the metronome clicks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum MetronomeVolume {
+    Small,
+    Middle,
+    Large,
 }
 
 /// One deck in a tick. Frames are at the tick's `sample_rate`.
@@ -244,7 +253,14 @@ impl Playback {
             let engine = self.player.engine()?;
             let which = rbl_deck::Deck::from(deck);
             engine.load_as(which, &path, load_id);
-            self.player.loaded_tracks.lock().insert(which, track_id);
+            self.player.loaded_tracks.lock().insert(which, track_id.clone());
+            // And the grid, for the metronome. A newer load may have landed
+            // while the analysis file was read; never put an old grid on new audio.
+            let grid = track_data::track_beats(&self.state, &track_id).unwrap_or_default();
+            if self.player.loaded_tracks.lock().get(&which) == Some(&track_id) {
+                let beats: Vec<(u32, bool)> = grid.iter().map(|b| (b.time_ms, b.number == 1)).collect();
+                engine.set_metronome_grid(which, &beats);
+            }
             Ok(())
         })
     }
@@ -282,6 +298,80 @@ impl Playback {
             engine.seek_ms(deck.into(), position_ms);
             self.player.start_ticker();
         }
+    }
+
+    /// Sets a loop between two points and turns it on; a head past the out
+    /// point goes back to the in point. Positions are file milliseconds.
+    pub fn set_loop(&self, deck: Deck, in_ms: f64, out_ms: f64) {
+        if let Some(engine) = self.player.opened() {
+            engine.set_loop_ms(deck.into(), in_ms, out_ms);
+            self.player.start_ticker();
+        }
+    }
+
+    /// RELOOP (on: back into the loop from its in point) and EXIT (off, range kept).
+    pub fn set_looping(&self, deck: Deck, on: bool) {
+        if let Some(engine) = self.player.opened() {
+            engine.set_looping(deck.into(), on);
+            self.player.start_ticker();
+        }
+    }
+
+    /// Forgets the deck's loop.
+    pub fn clear_loop(&self, deck: Deck) {
+        if let Some(engine) = self.player.opened() {
+            engine.clear_loop(deck.into());
+            self.player.start_ticker();
+        }
+    }
+
+    /// Starts a drag: audio follows `scrub_to` until `scrub_end`.
+    pub fn scrub_begin(&self, deck: Deck) {
+        if let Some(engine) = self.player.opened() {
+            engine.scrub_begin(deck.into());
+            self.player.start_ticker();
+        }
+    }
+
+    /// Where the pointer is now, mid-drag. Fractional milliseconds on purpose.
+    pub fn scrub_to(&self, deck: Deck, position_ms: f64) {
+        if let Some(engine) = self.player.opened() {
+            engine.scrub_to_ms(deck.into(), position_ms);
+        }
+    }
+
+    pub fn scrub_end(&self, deck: Deck) {
+        if let Some(engine) = self.player.opened() {
+            engine.scrub_end(deck.into());
+            self.player.start_ticker();
+        }
+    }
+
+    /// A click on every beat of the grid while the deck plays.
+    pub fn set_metronome(&self, deck: Deck, on: bool) {
+        if let Some(engine) = self.player.opened() {
+            engine.set_metronome(deck.into(), on);
+        }
+    }
+
+    /// Which click (1 to 3) and how loud, for both decks. Remembered if no engine is up.
+    pub fn set_metronome_sound(&self, sound: u8, volume: MetronomeVolume) {
+        let sound = match sound {
+            1 => rbl_deck::ClickSound::One,
+            3 => rbl_deck::ClickSound::Three,
+            _ => rbl_deck::ClickSound::Two,
+        };
+        let volume = match volume {
+            MetronomeVolume::Small => rbl_deck::ClickVolume::Small,
+            MetronomeVolume::Middle => rbl_deck::ClickVolume::Middle,
+            MetronomeVolume::Large => rbl_deck::ClickVolume::Large,
+        };
+        self.player.set_metronome(sound, volume);
+    }
+
+    /// Whether the deck's metronome is on.
+    pub fn metronome_on(&self, deck: Deck) -> bool {
+        self.player.opened().is_some_and(|engine| engine.metronome_on(deck.into()))
     }
 
     /// Speed as a multiple of the file's own (0.5 to 2). Remembered if no

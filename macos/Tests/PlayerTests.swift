@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 
@@ -5,6 +6,7 @@ import Testing
 
 // MARK: - Pure logic
 
+@Suite(.scratchDefaults)
 struct PlayerLogicTests {
     @Test func anAnchorExtrapolatesAtItsRateAndNeverBackwards() {
         let anchor = Anchor(frames: 48_000, at: 10, sampleRate: 48_000, playing: true, generation: 1, rate: 1.5)
@@ -113,35 +115,36 @@ struct PlayerLogicTests {
     }
 
     @Test func keyBindingsAreSpaceAndHeldC() {
-        func command(_ code: UInt16, up: Bool = false, repeating: Bool = false, typing: Bool = false, mods: NSEvent.ModifierFlags = []) -> PlayerModel.KeyCommand? {
-            PlayerModel.command(keyCode: code, modifiers: mods, isUp: up, isRepeat: repeating, typing: typing)
+        func action(_ code: UInt16, _ char: String = "", up: Bool = false, repeating: Bool = false, typing: Bool = false, mods: NSEvent.ModifierFlags = [], loaded: Bool = true) -> PlayerKeyAction? {
+            PlayerKeymap.action(
+                for: KeyChord(character: char, keyCode: code, modifiers: mods), isUp: up, isRepeat: repeating,
+                typing: typing, loaded: loaded)
         }
-        #expect(command(49) == .togglePlay)
-        #expect(command(49, repeating: true) == .swallow)
-        #expect(command(49, typing: true) == nil)
-        #expect(command(8) == .cueDown)
-        #expect(command(8, repeating: true) == .swallow)
-        #expect(command(8, up: true) == .cueUp)
+        #expect(action(49, " ") == .togglePlay)
+        #expect(action(49, " ", repeating: true) == .swallow)
+        #expect(action(49, " ", typing: true) == nil)
+        #expect(action(8, "c") == .cueDown)
+        #expect(action(8, "c", repeating: true) == .swallow)
+        #expect(action(8, "c", up: true) == .cueUp)
         // CUE must be released even if focus moved to a text field meanwhile.
-        #expect(command(8, up: true, typing: true) == .cueUp)
-        #expect(command(8, mods: .command) == nil)  // copy
-        #expect(command(8, mods: .shift) == nil)  // deck B, a later slice
-        #expect(command(0) == nil)
+        #expect(action(8, "c", up: true, typing: true) == .cueUp)
+        #expect(action(8, "c", mods: .command) == nil)  // copy
+        #expect(action(8, "c", mods: .shift) == nil)  // deck B, a later slice
+        #expect(action(0, "a", loaded: false) == nil)
     }
 }
 
 // MARK: - Deck and preview models against the mock engine
 
 @MainActor
+@Suite(.scratchDefaults)
 struct DeckModelTests {
     final class Clock {
         var now = 100.0
     }
 
     func makeDeck(_ playback: MockPlayback, clock: Clock = Clock()) -> DeckModel {
-        let suite = "rbxport-tests-\(UUID().uuidString)"
-        return DeckModel(
-            deck: .a, playback: playback, defaults: UserDefaults(suiteName: suite)!, now: { clock.now })
+        DeckModel(deck: .a, playback: playback, defaults: scratchDefaults(), now: { clock.now })
     }
 
     func track(_ id: String = "7", cues: [UInt32] = []) -> DeckTrack {
@@ -259,7 +262,8 @@ struct DeckModelTests {
         #expect(deck.anchor.extrapolate(at: 100) == 100)
         // A tick still carrying the old generation must not drag it back.
         deck.apply(tick: tick(frames: 48_000 * 10, playing: true, generation: 3), sampleRate: 48_000, at: 100.1)
-        #expect(deck.anchor.extrapolate(at: 100.1) == 100)
+        // Still running on from the seek (100 s plus a tenth), not back at the stale 10 s.
+        #expect(abs(deck.anchor.extrapolate(at: 100.1) - 100.1) < 1e-9)
         // The engine's confirmation (new generation) is taken.
         deck.apply(tick: tick(frames: 48_000 * 100, playing: true, generation: 4), sampleRate: 48_000, at: 100.2)
         #expect(deck.anchor.generation == 4)
@@ -305,8 +309,7 @@ struct DeckModelTests {
     }
 
     @Test func theTimeToggleSwitchesAndPersists() {
-        let suite = "rbxport-tests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = scratchDefaults()
         let deck = DeckModel(deck: .a, playback: MockPlayback(), defaults: defaults)
         #expect(deck.timeMode == .elapsed)
         deck.toggleTimeMode()
@@ -318,12 +321,16 @@ struct DeckModelTests {
 }
 
 @MainActor
+@Suite(.scratchDefaults)
 struct PlayerModelTests {
     func makePlayer() async -> (AppModel, MockBackend) {
         let backend = MockBackend(trackCount: 300)
         let model = AppModel(backend: backend, layoutStore: isolatedStore())
         model.start()
         _ = await eventually { model.opened != nil }
+        // Nothing but the table asks for rows; ask for the first page here.
+        _ = model.pager.row(at: 0)
+        _ = await eventually { model.pager.peek(at: 0) != nil }
         return (model, backend)
     }
 
@@ -381,6 +388,7 @@ struct PlayerModelTests {
 }
 
 @MainActor
+@Suite(.scratchDefaults)
 struct PreviewModelTests {
     final class Clock {
         var now = 10.0

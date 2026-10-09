@@ -4,13 +4,9 @@ import Testing
 @testable import rbxport
 
 @MainActor
+@Suite(.scratchDefaults)
 struct InfoPanelModelTests {
-    private func defaults() -> UserDefaults {
-        let suite = "rbxport-info-\(UUID().uuidString)"
-        let d = UserDefaults(suiteName: suite)!
-        d.removePersistentDomain(forName: suite)
-        return d
-    }
+    private func defaults() -> UserDefaults { scratchDefaults(prefix: "rbxport-info") }
 
     private func make(_ backend: MockBackend = MockBackend(trackCount: 50)) -> (InfoPanelModel, MockBackend, ArtworkService) {
         let artwork = ArtworkService(backend: backend, settle: .zero)
@@ -146,6 +142,7 @@ struct InfoPanelModelTests {
 }
 
 @MainActor
+@Suite(.scratchDefaults)
 struct InfoPanelAppModelTests {
     @Test func theOpenStateIsPersisted() {
         let store = isolatedStore()
@@ -202,6 +199,7 @@ struct InfoPanelAppModelTests {
     }
 }
 
+@Suite(.scratchDefaults)
 struct InfoFormatTests {
     private func details(
         fileType: UInt32 = 11, size: UInt64 = 47_300_000, rate: UInt32 = 44_100, bitrate: UInt32 = 1411,

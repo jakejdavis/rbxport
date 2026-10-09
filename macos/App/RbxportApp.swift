@@ -26,7 +26,7 @@ struct RbxportApp: App {
         WindowGroup {
             ContentView()
                 .environment(model)
-                .frame(minWidth: 900, minHeight: 500)
+                .frame(minWidth: 980, minHeight: 640)
                 .task {
                     guard !isUnderTest else { return }
                     model.start()

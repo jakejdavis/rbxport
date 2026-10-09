@@ -4,6 +4,7 @@ import Testing
 @testable import rbxport
 
 @MainActor
+@Suite(.scratchDefaults)
 struct SidebarTests {
     private func node(_ id: String, _ name: String, _ kind: NodeKind, _ depth: UInt32, open: Bool? = nil, count: UInt32? = nil)
         -> TreeNode
@@ -214,6 +215,7 @@ struct SidebarTests {
 }
 
 @MainActor
+@Suite(.scratchDefaults)
 struct SidebarSelectionTests {
     @Test func selectionAndExpansionSurviveARelaunch() async {
         let store = isolatedStore()

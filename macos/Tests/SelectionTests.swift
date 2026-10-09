@@ -4,6 +4,7 @@ import Testing
 @testable import rbxport
 
 @MainActor
+@Suite(.scratchDefaults)
 struct SelectionTests {
     private func ready(_ backend: MockBackend = MockBackend(trackCount: 300)) async -> AppModel {
         let model = AppModel(backend: backend, layoutStore: isolatedStore())

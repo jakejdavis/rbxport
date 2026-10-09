@@ -8,14 +8,14 @@ use std::time::Instant;
 use rbl_app::dto::LibraryProblemDto;
 use rbl_app::error::run_command;
 use rbl_app::state::AppState;
-use rbl_app::{browse, details, explorer, media, startup, AppError, AppEvent, AppResult, EventSink};
+use rbl_app::{browse, details, explorer, media, startup, track_data, AppError, AppEvent, AppResult, EventSink};
 use rbl_db::{Library as Db, LibraryLocation, OpenMode};
 
 use crate::error::FfiError;
 use crate::events::{EventListener, ListenerSink};
 use crate::playback::{Playback, PlaybackListener};
 use crate::types::{
-    Device, ExplorerChildren, ExplorerRoot, ExtraColumn, FilterValues, LibraryProblem, PlaylistFileFormat, LibrarySummary, LoadOutcome, Row, TrackDetails, TrackLookups, TreeNode, ViewHandle, ViewSpec, WaveformKind,
+    Beat, Cue, Phrase, Device, ExplorerChildren, ExplorerRoot, ExtraColumn, FilterValues, LibraryProblem, PlaylistFileFormat, LibrarySummary, LoadOutcome, Row, TrackDetails, TrackLookups, TreeNode, ViewHandle, ViewSpec, WaveformKind,
 };
 
 /// Where `load_library` gets the library from.
@@ -199,6 +199,29 @@ impl Core {
     /// A track's overview waveform for a palette; empty when it has no analysis.
     pub fn waveform(&self, track_id: String, kind: WaveformKind) -> Result<Vec<u8>, FfiError> {
         ffi("waveform", || media::track_waveform(&self.state, &track_id, kind.wire(), None, None))
+    }
+
+    /// A track's beat grid, `PQTZ` offset applied. Empty without an analysis.
+    pub fn track_beats(&self, track_id: String) -> Result<Vec<Beat>, FfiError> {
+        ffi("track_beats", || track_data::track_beats(&self.state, &track_id))
+            .map(|beats| beats.into_iter().map(Into::into).collect())
+    }
+
+    /// A track's hot cues, memory cues and loops, read fresh from the library.
+    pub fn track_cues(&self, track_id: String) -> Result<Vec<Cue>, FfiError> {
+        ffi("track_cues", || track_data::track_cues(&self.state, &track_id))
+            .map(|cues| cues.into_iter().map(Into::into).collect())
+    }
+
+    /// A track's phrases, resolved to times.
+    pub fn track_phrases(&self, track_id: String) -> Result<Vec<Phrase>, FfiError> {
+        ffi("track_phrases", || track_data::track_phrases(&self.state, &track_id))
+            .map(|phrases| phrases.into_iter().map(Into::into).collect())
+    }
+
+    /// Where a voice was heard: one intensity byte per 46.44 ms.
+    pub fn track_vocals(&self, track_id: String) -> Result<Vec<u8>, FfiError> {
+        ffi("track_vocals", || track_data::track_vocals(&self.state, &track_id, None, None))
     }
 
     /// The decks and the preview player, reporting to `listener`. Make one and

@@ -423,3 +423,65 @@ pub struct TrackLookups {
     pub genres: Vec<String>,
     pub my_tag_categories: Vec<MyTagCategory>,
 }
+
+/// One beat of a track's grid, the `PQTZ` offset already applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct Beat {
+    pub time_ms: u32,
+    /// 1 to 4 in its bar; 1 is the downbeat.
+    pub number: u8,
+    pub tempo_x100: u16,
+}
+
+impl From<rbl_app::track_data::BeatDto> for Beat {
+    fn from(b: rbl_app::track_data::BeatDto) -> Self {
+        Self { time_ms: b.time_ms, number: b.number, tempo_x100: b.tempo_x100 }
+    }
+}
+
+/// A cue point: a hot cue (with a letter), a memory cue, or a loop of either.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct Cue {
+    /// Empty when the id is not editable.
+    pub id: String,
+    pub position_ms: u32,
+    /// Where a loop ends; 0 for a plain cue.
+    pub out_ms: u32,
+    /// `A` to `P` for a hot cue, empty for a memory cue.
+    pub letter: String,
+    pub memory: bool,
+    /// `#RRGGBB`, or none for the default.
+    pub colour: Option<String>,
+    pub comment: String,
+}
+
+impl From<rbl_app::dto::CueDto> for Cue {
+    fn from(c: rbl_app::dto::CueDto) -> Self {
+        Self {
+            id: c.id,
+            position_ms: c.position_ms,
+            out_ms: c.out_ms,
+            letter: c.letter,
+            memory: c.memory,
+            colour: c.colour,
+            comment: c.comment,
+        }
+    }
+}
+
+/// One phrase of the song structure.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct Phrase {
+    /// The 1-based beat it starts on.
+    pub beat: u32,
+    pub label: String,
+    pub kind: u16,
+    /// Where that beat falls, when the grid reaches it.
+    pub time_ms: Option<u32>,
+}
+
+impl From<rbl_app::dto::PhraseDto> for Phrase {
+    fn from(p: rbl_app::dto::PhraseDto) -> Self {
+        Self { beat: p.beat, label: p.label, kind: p.kind, time_ms: p.time_ms }
+    }
+}
