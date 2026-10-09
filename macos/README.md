@@ -1,14 +1,13 @@
-# rbxport native (macOS spike)
+# rbxport for macOS
 
-A SwiftUI/AppKit front end over the Rust library crates. It proves the
-bridge and the track table; it is read-only and has no updater.
+A SwiftUI/AppKit front end over the Rust library crates. It has no updater.
 
 ## Prerequisites
 
 - macOS 15+, Xcode (Swift 6), Apple silicon (arm64 only for now)
 - Rust via rustup (the toolchain in `rust-toolchain.toml` installs itself)
 - XcodeGen: `brew install xcodegen`
-- rekordbox installed (the app opens `~/Library/Pioneer/rekordbox` read-only)
+- rekordbox installed (the app opens `~/Library/Pioneer/rekordbox`)
 
 ## Build and run
 

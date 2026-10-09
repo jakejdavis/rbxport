@@ -301,8 +301,9 @@ struct PhraseStrip: View {
         Canvas { context, size in
             let phraseHeight = size.height - (deck.vocals.isEmpty ? 0 : 3)
             for phrase in deck.phrases {
+                let span: CGFloat = CGFloat(phrase.to - phrase.from) * size.width
                 let rect = CGRect(
-                    x: phrase.from * size.width, y: size.height - phraseHeight, width: (phrase.to - phrase.from) * size.width - 1,
+                    x: CGFloat(phrase.from) * size.width, y: size.height - phraseHeight, width: span - 1,
                     height: phraseHeight)
                 context.fill(Path(rect), with: .color(Color(phrase.kind.colour)))
                 if rect.width > 34 {

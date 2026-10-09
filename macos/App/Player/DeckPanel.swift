@@ -377,7 +377,8 @@ private struct TempoFader: View {
             .gesture(
                 DragGesture(minimumDistance: 0).onChanged { value in
                     guard deck.isLoaded, height > 0 else { return }
-                    deck.setFader(2 * min(max(value.location.y, 0), height) / height - 1)
+                    let fraction: Double = Double(min(max(value.location.y, 0), height) / height)
+                    deck.setFader(2 * fraction - 1)
                 })
             .onTapGesture(count: 2) { if deck.isLoaded { deck.resetTempo() } }
         }

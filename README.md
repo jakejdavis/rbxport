@@ -6,10 +6,15 @@
 
 # rbxport
 
+> This is a native macOS rebuild of [chrisle/rbxport](https://github.com/chrisle/rbxport).
+> It is a separate project and is not maintained by the original authors.
+
 rbxport is a music library management app inspired by rekordbox. It keeps its
 feature set deliberately small, aiming for a faster, simpler user experience.
 
-Its scope is limited to library management, USB exporting, and PRO DJ LINK.
+Its scope is limited to library management, USB exporting, and PRO DJ LINK. It
+is a native Mac app, written in SwiftUI and AppKit over a Rust core, and it needs
+macOS 15 or later on Apple silicon.
 
 ## Project vision
 
@@ -26,9 +31,9 @@ Two commitments define what "small" must not cost:
 
 - **Compatibility.** rbxport aims to be fully compatible with the current
   version of rekordbox and all the hardware that rekordbox supports.
-- **Performance.** rbxport maintains its speed through a performance budget,
-  defined in `perf-budgets.json` and enforced by `pnpm budget` and CI. See
-  [Development conventions](docs/development/conventions.md).
+- **Performance.** rbxport stays fast by being native: track tables are lazy
+  and paged, waveforms are drawn by the system, and high-rate state such as deck
+  position is pulled once per display frame instead of pushed.
 
 If you want to propose a feature, read
 [Feature proposals](CONTRIBUTING.md#feature-proposals) in the contributing guide
@@ -38,35 +43,38 @@ first.
 
 | Layer | Technology |
 | --- | --- |
-| Desktop app | Tauri 2. |
-| Frontend | React and TypeScript, with TanStack Virtual for track browsing. |
+| Desktop app | SwiftUI and AppKit, with an `NSTableView` for track browsing. |
+| Bridge | UniFFI, over the Tauri-free `rbl-app` core. |
 | Backend | Rust, with independent `rbl-*` crates for library, audio, export, and LINK logic. |
 | Database | SQLCipher for rekordbox libraries and OneLibrary USB exports. |
-| Build tooling | Vite, pnpm, and Cargo. |
-| Testing | Vitest, Playwright, and Rust tests with temporary library fixtures. |
+| Build tooling | Xcode, XcodeGen, and Cargo. |
+| Testing | Swift Testing against a mock backend, and Rust tests with temporary library fixtures. |
 
-See [Architecture](docs/development/architecture.md) for the repository layout
-and how the frontend, desktop shell, and Rust crates fit together.
+See [macOS app](macos/README.md) for how the bridge and the Swift layers fit
+together, and [Architecture](docs/development/architecture.md) for the Rust
+crates.
 
 ## Start here
 
-For a first look at the interface, use the browser with a mock library:
+You need macOS 15 or later, Xcode with Swift 6, Rust via rustup, and XcodeGen
+(`brew install xcodegen`). The app opens your installed rekordbox library, so back it up first. To use a
+throwaway library instead, set `RBXPORT_FIXTURE_DIR=<dir>`.
 
 ```sh
-pnpm install
-pnpm dev:web
+macos/scripts/build-rust.sh debug     # first run builds SQLCipher/OpenSSL: slow
+cd macos && xcodegen generate
+xcodebuild -scheme rbxport -configuration Debug -derivedDataPath build build
+open build/Build/Products/Debug/rbxport.app
 ```
 
-This requires Node 24 and pnpm 10.17.1. It does not open an installed rekordbox
-library or require a Rust build. For desktop prerequisites and safe library
-setup, read [Getting started](docs/development/getting-started.md).
+For signing, packaging, and the DMG, read [macOS app](macos/README.md).
 
 ## Developer reading path
 
 Read these in order to understand the project and make your first change:
 
-1. [Getting started](docs/development/getting-started.md): prerequisites, run modes, and library safety.
-2. [Architecture](docs/development/architecture.md): repository map, crate responsibilities, IPC, and edit flow.
+1. [macOS app](macos/README.md): prerequisites, build, the bridge, and the Swift architecture.
+2. [Architecture](docs/development/architecture.md): crate responsibilities and edit flow.
 3. [Development conventions](docs/development/conventions.md): code style, performance, translation, and evidence rules.
 4. [Testing](docs/development/testing.md): checks, test setup, and what each result proves.
 5. [Contributing](CONTRIBUTING.md): issues, branches, implementation, validation, and review.
@@ -80,13 +88,12 @@ analysis, USB-format, and hardware references.
 
 | Command | Purpose |
 | --- | --- |
-| `pnpm dev:web` | Browser UI with the mock backend. |
-| `pnpm dev` | Desktop app; can open your installed library. Read the safety guide first. |
-| `pnpm lint` | Frontend lint rules. |
-| `pnpm build` | TypeScript check and production frontend bundle. |
-| `pnpm test` | Vitest tests. |
-| `pnpm e2e` | Playwright browser tests against the mock backend. |
+| `macos/scripts/build-rust.sh debug` | Build the Rust bridge, Swift bindings, and XCFramework. |
+| `xcodegen generate` | Regenerate the Xcode project (run in `macos/`). |
+| `xcodebuild -scheme rbxport -configuration Debug -derivedDataPath build test` | Swift tests against the mock backend and a fixture library. |
+| `cargo test -p rbl-app -p rbl-ffi` | Rust tests for the app core and the bridge. |
 | `RB_LITE_TEST=1 cargo test --workspace` | Rust tests with installed-library writes refused. |
+| `macos/scripts/package.sh` | Release build and DMG. |
 
 ## License and trademarks
 
