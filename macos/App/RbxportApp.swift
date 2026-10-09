@@ -29,7 +29,10 @@ struct RbxportApp: App {
         if let suite = env["RBXPORT_DEFAULTS_SUITE"], DeviceDemoGuard.isTemporary(suite), let defaults = UserDefaults(suiteName: suite) {
             store = ColumnLayoutStore(defaults: defaults)
         }
-        _model = State(initialValue: AppModel(backend: backend, layoutStore: store))
+        let appModel = AppModel(backend: backend, layoutStore: store)
+        _model = State(initialValue: appModel)
+        // AppleScript reaches the app through this; tests make their own host.
+        if !isUnderTest { ScriptHost.install(model: appModel) }
     }
 
     var body: some Scene {
