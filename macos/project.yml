@@ -21,12 +21,15 @@ targets:
     platform: macOS
     sources:
       - path: App
+      - path: Resources
+        buildPhase: resources
       # Produced by scripts/build-rust.sh; run it before `xcodegen`.
       - path: Generated/swift
     dependencies:
       - framework: Generated/rbl_ffi.xcframework
         embed: false
         link: true
+    # AppleScript: Cocoa Scripting reads the dictionary named here from the bundle's Resources.
     preBuildScripts:
       - name: Build Rust bridge
         script: |
@@ -38,6 +41,7 @@ targets:
         PRODUCT_NAME: rbxport
         PRODUCT_BUNDLE_IDENTIFIER: com.rbxport.native
         GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_FILE: Info.plist
         INFOPLIST_KEY_CFBundleDisplayName: rbxport
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.music
         INFOPLIST_KEY_NSHumanReadableCopyright: GPL-2.0-or-later

@@ -357,6 +357,11 @@ final class AppModel {
     }
 
     func handle(_ event: LibraryEvent) async {
+        // AppleScript caches what it read for one pass of the run loop; the library moved under it.
+        switch event {
+        case .libraryReady, .libraryChanged, .tagListChanged: ScriptHost.current?.invalidate()
+        default: break
+        }
         switch event {
         case .libraryReady:
             await refresh(selectFirst: true)
