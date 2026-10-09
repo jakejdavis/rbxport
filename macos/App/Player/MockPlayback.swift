@@ -20,6 +20,7 @@ final class MockPlayback: PlaybackEngine, @unchecked Sendable {
         case scrubTo(Deck, Double)
         case scrubEnd(Deck)
         case metronome(Deck, Bool)
+        case refreshGrid(Deck)
         case metronomeSound(UInt8)
         case playAfter(Deck, Double)
         case trim(Deck, Float)
@@ -117,6 +118,7 @@ final class MockPlayback: PlaybackEngine, @unchecked Sendable {
     func scrubTo(deck: Deck, ms: Double) { record(.scrubTo(deck, ms)) }
     func scrubEnd(deck: Deck) { record(.scrubEnd(deck)) }
     func setMetronome(deck: Deck, on: Bool) { record(.metronome(deck, on)) }
+    func refreshMetronomeGrid(deck: Deck) { record(.refreshGrid(deck)) }
     func setMetronomeSound(_ sound: UInt8) { record(.metronomeSound(sound)) }
     func state() -> PlaybackTick { Self.makeTick(a: Self.emptyDeck, b: Self.emptyDeck, sampleRate: 0) }
     func playAfter(deck: Deck, delayMs: Double) { record(.playAfter(deck, delayMs)) }

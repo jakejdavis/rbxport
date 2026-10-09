@@ -32,7 +32,7 @@ pub use types::{
     SearchField, SortKey,
     TrackDetails, TrackLookups, MyTag, MyTagCategory, WaveformKind,
     TrackSource, TreeNode, ViewHandle, ViewSpec, ImportProgress, SmartCondition, SmartLogic, SmartRule, TrackField, ImportReport, XmlImportReport, MissingTracks, Duplicates,
-    RelocateReport,
+    RelocateReport, AnalysisResult, AnalysisSettings, CueSlot, GridEdit, GridState,
 };
 
 uniffi::setup_scaffolding!();

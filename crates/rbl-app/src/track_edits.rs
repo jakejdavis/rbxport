@@ -145,6 +145,13 @@ pub fn remove_from_history(state: &AppState, sink: &dyn EventSink, history: &str
     commit(state, sink, Touched::Histories(Vec::new()), |w| w.remove_from_history(history, tracks).map(|_| ()))
 }
 
+/// A play: the track goes on today's history session and its play count goes
+/// up. Not undoable (it drops any redo branch). Returns the new generation.
+pub fn record_play(state: &AppState, sink: &dyn EventSink, track: &str) -> AppResult<u32> {
+    require_collection(std::slice::from_ref(&track.to_owned()))?;
+    commit(state, sink, Touched::Histories(vec![track.to_owned()]), |w| w.record_play(track).map(|_| ()))
+}
+
 /// Remove from Collection: the tracks leave the library and every playlist. The
 /// files stay. Permanent: the undo history is cleared.
 pub fn remove_from_collection(state: &AppState, sink: &dyn EventSink, tracks: &[String]) -> AppResult<u32> {
@@ -378,5 +385,31 @@ mod tests {
         let err = reload_tags(&state, &sink, &ids(1)).unwrap_err();
         assert_eq!(err.kind, ErrorKind::Malformed);
         assert!(sink.names().is_empty());
+    }
+
+    #[test]
+    fn a_play_is_refused_by_the_gate_and_otherwise_counted_and_listed() {
+        let (_dir, state, sink) = fixture(true);
+        let t = track_id(4);
+        let before = details(&state, &t).play_count;
+        let err = record_play(&state, &sink, &t).unwrap_err();
+        assert_eq!((err.kind, err.message.as_str()), (ErrorKind::ReadOnly, crate::edits::PROTECTED_MESSAGE));
+        assert!(sink.names().is_empty());
+        assert_eq!(details(&state, &t).play_count, before);
+
+        state.set_protect_library(false);
+        record_play(&state, &sink, &t).unwrap();
+        assert_eq!(details(&state, &t).play_count, before + 1);
+        assert_eq!(sink.names(), ["library:changed", "edit-history:changed"]);
+        // Not undoable, but it does not wipe the undo entries behind it.
+        set_rating(&state, &sink, std::slice::from_ref(&t), 3).unwrap();
+        record_play(&state, &sink, &t).unwrap();
+        assert!(edits::edit_history(&state).can_undo);
+        assert_eq!(details(&state, &t).play_count, before + 2);
+
+        let err = record_play(&state, &sink, "file:/tmp/x.wav").unwrap_err();
+        assert_eq!((err.kind, err.message.as_str()), (ErrorKind::Malformed, LOOSE_MESSAGE));
+        let err = record_play(&state, &sink, "no-such-track").unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Malformed);
     }
 }

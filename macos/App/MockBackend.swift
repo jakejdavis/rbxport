@@ -87,6 +87,18 @@ actor MockBackend: BackendProtocol {
     var phraseAnswers: [String: [Phrase]] = [:]
     var vocalAnswers: [String: Data] = [:]
     private(set) var analysisCalls: [String] = []
+    // Phase 4c state.
+    private var nextCueID = 9_000
+    private(set) var gridStates: [String: GridState] = [:]
+    private(set) var gridEdits: [(track: String, edit: GridEdit, fromMs: UInt32?, transaction: String?)] = []
+    private(set) var analysisRuns: [(track: String, rekordbox: Bool)] = []
+    private(set) var peakAnalyses = 0
+    private var activeAnalyses = 0
+    private(set) var reloadCalls = 0
+    private(set) var recordedPlays: [String] = []
+    /// How long an analysis takes, and which tracks fail it, set by tests.
+    var analysisDelay: Duration = .zero
+    var analysisFailures: [String: FfiError] = [:]
     private(set) var peakWaveformCalls = 0
     private(set) var peakArtworkCalls = 0
     private var activeArtworkCalls = 0
@@ -218,6 +230,7 @@ actor MockBackend: BackendProtocol {
     }
 
     func trackPath(id: String) async throws -> String { "/mock/audio/track-\(id).mp3" }
+    nonisolated func trackPathSync(id: String) -> String? { "/mock/audio/track-\(id).mp3" }
 
     func setArtwork(_ data: Data, for id: String) { artworkAnswers[id] = data }
     func setArtworkDelay(_ delay: Duration) { artworkDelay = delay }
@@ -789,6 +802,184 @@ extension MockBackend {
             let answer = autoRelocateAnswer
             missingList.removeFirst(min(Int(answer.relocated), missingList.count))
             return answer
+        }
+    }
+
+    // MARK: Phase 4c
+
+    func setAnalysisDelay(_ delay: Duration) { analysisDelay = delay }
+    func setAnalysisFailure(_ error: FfiError, for id: String) { analysisFailures[id] = error }
+
+    /// A write that is not undoable: logged, gated, and failable once.
+    private func gated<T>(_ log: String, _ body: () throws -> T) throws -> T {
+        editLog.append(log)
+        if gateProtected { throw FfiError.ReadOnly(message: Self.protectedMessage, detail: nil) }
+        if gateRunning { throw FfiError.ReadOnly(message: Self.runningMessage, detail: nil) }
+        if let failure = failNextEdit {
+            failNextEdit = nil
+            throw failure
+        }
+        return try body()
+    }
+
+    private func makeCue(slot: CueSlot, position: UInt32, out: UInt32) throws -> Cue {
+        nextCueID += 1
+        switch slot {
+        case .memory:
+            return Cue(id: "\(nextCueID)", positionMs: position, outMs: out, letter: "", memory: true, colour: nil, comment: "")
+        case .hot(let letter):
+            guard letter.count == 1, ("A"..."P").contains(letter) else {
+                throw FfiError.Malformed(message: "\(letter) is not a hot cue slot rekordbox has", detail: nil)
+            }
+            return Cue(id: "\(nextCueID)", positionMs: position, outMs: out, letter: letter, memory: false, colour: nil, comment: "")
+        }
+    }
+
+    func addCue(trackID: String, slot: CueSlot, positionMs: UInt32) async throws -> String {
+        try gated("addCue(\(trackID),\(slot),\(positionMs))") {
+            let cue = try makeCue(slot: slot, position: positionMs, out: 0)
+            cueAnswers[trackID, default: []].append(cue)
+            continuation.yield(.cuesChanged(trackId: trackID))
+            return cue.id
+        }
+    }
+
+    func addLoop(trackID: String, slot: CueSlot, inMs: UInt32, outMs: UInt32, beats: UInt16) async throws -> String {
+        try gated("addLoop(\(trackID),\(slot),\(inMs),\(outMs))") {
+            guard outMs > inMs else { throw FfiError.Malformed(message: "A loop must end after it starts.", detail: nil) }
+            let cue = try makeCue(slot: slot, position: inMs, out: outMs)
+            cueAnswers[trackID, default: []].append(cue)
+            continuation.yield(.cuesChanged(trackId: trackID))
+            return cue.id
+        }
+    }
+
+    private func owner(of cueID: String) throws -> String {
+        guard let track = cueAnswers.first(where: { $0.value.contains { $0.id == cueID } })?.key else {
+            throw FfiError.NotFound(message: "no cue \(cueID)", detail: nil)
+        }
+        return track
+    }
+
+    func setCueColour(cueID: String, colour: UInt8?) async throws {
+        try gated("setCueColour(\(cueID),\(colour.map(String.init) ?? "nil"))") {
+            let track = try owner(of: cueID)
+            if let i = cueAnswers[track]?.firstIndex(where: { $0.id == cueID }) {
+                cueAnswers[track]?[i].colour = colour.map { "#0000\(String($0 + 16, radix: 16))" }
+            }
+            continuation.yield(.cuesChanged(trackId: track))
+        }
+    }
+
+    func deleteCue(cueID: String) async throws {
+        try gated("deleteCue(\(cueID))") {
+            let track = try owner(of: cueID)
+            cueAnswers[track]?.removeAll { $0.id == cueID }
+            continuation.yield(.cuesChanged(trackId: track))
+        }
+    }
+
+    func convertMemoryCuesToHot(trackID: String) async throws -> UInt32 {
+        try gated("convertMemoryCuesToHot(\(trackID))") {
+            let cues = cueAnswers[trackID] ?? []
+            let taken = Set(cues.filter { !$0.memory }.map(\.letter))
+            var free = "ABCDEFGHIJKLMNOP".map(String.init).filter { !taken.contains($0) }.makeIterator()
+            var made: UInt32 = 0
+            for memory in cues.filter(\.memory).sorted(by: { $0.positionMs < $1.positionMs }) {
+                guard let letter = free.next() else { break }
+                cueAnswers[trackID, default: []].append(
+                    try makeCue(slot: .hot(letter: letter), position: memory.positionMs, out: memory.outMs))
+                made += 1
+            }
+            continuation.yield(.cuesChanged(trackId: trackID))
+            return made
+        }
+    }
+
+    private func gridState(for id: String) -> GridState {
+        gridStates[id] ?? GridState(
+            bpmX100: beatAnswers[id]?.first.map { UInt32($0.tempoX100) } ?? 0, beats: UInt32(beatAnswers[id]?.count ?? 0),
+            canUndo: false, canRedo: false, undoLabel: nil, redoLabel: nil, locked: false)
+    }
+
+    func gridState(trackID: String) async throws -> GridState { gridState(for: trackID) }
+
+    func gridEdit(trackID: String, edit: GridEdit, fromMs: UInt32?, transaction: String?) async throws -> GridState {
+        try gated("gridEdit(\(trackID),\(edit))") {
+            var state = gridState(for: trackID)
+            if state.locked { throw FfiError.ReadOnly(message: "The beat grid is locked. Unlock it to edit.", detail: nil) }
+            gridEdits.append((trackID, edit, fromMs, transaction))
+            if case .nudge(let ms) = edit {
+                beatAnswers[trackID] = beatAnswers[trackID]?.map {
+                    Beat(timeMs: UInt32(max(0, Int64($0.timeMs) + Int64(ms))), number: $0.number, tempoX100: $0.tempoX100)
+                }
+            }
+            state.canUndo = true
+            state.undoLabel = "Edit"
+            gridStates[trackID] = state
+            continuation.yield(.gridChanged(trackId: trackID))
+            return state
+        }
+    }
+
+    func gridUndo(trackID: String) async throws -> GridState {
+        try gated("gridUndo(\(trackID))") {
+            var state = gridState(for: trackID)
+            guard state.canUndo else { throw FfiError.NotFound(message: "Nothing to undo.", detail: nil) }
+            state.canUndo = false
+            state.canRedo = true
+            gridStates[trackID] = state
+            continuation.yield(.gridChanged(trackId: trackID))
+            return state
+        }
+    }
+
+    func gridRedo(trackID: String) async throws -> GridState {
+        try gated("gridRedo(\(trackID))") {
+            var state = gridState(for: trackID)
+            guard state.canRedo else { throw FfiError.NotFound(message: "Nothing to redo.", detail: nil) }
+            state.canUndo = true
+            state.canRedo = false
+            gridStates[trackID] = state
+            continuation.yield(.gridChanged(trackId: trackID))
+            return state
+        }
+    }
+
+    func gridLock(trackID: String, on: Bool) async throws -> GridState {
+        try gated("gridLock(\(trackID),\(on))") {
+            var state = gridState(for: trackID)
+            state.locked = on
+            gridStates[trackID] = state
+            continuation.yield(.gridChanged(trackId: trackID))
+            return state
+        }
+    }
+
+    func analyseTrack(trackID: String, settings: AnalysisSettings, rekordboxMode: Bool) async throws -> AnalysisResult {
+        activeAnalyses += 1
+        peakAnalyses = max(peakAnalyses, activeAnalyses)
+        defer { activeAnalyses -= 1 }
+        if analysisDelay > .zero { try? await Task.sleep(for: analysisDelay) }
+        return try gated("analyseTrack(\(trackID))") {
+            if let failure = analysisFailures[trackID] { throw failure }
+            analysisRuns.append((trackID, rekordboxMode))
+            continuation.yield(.analysisChanged(trackId: trackID))
+            return AnalysisResult(trackId: trackID, analysed: 105, bpmX100: 12_800, key: "Am", beats: 64, durationSec: 20, elapsedMs: 5)
+        }
+    }
+
+    func reloadLibrary() async throws -> UInt32 {
+        reloadCalls += 1
+        generation += 1
+        continuation.yield(.libraryChanged(generation: generation))
+        return generation
+    }
+
+    func recordPlay(trackID: String) async throws -> UInt32 {
+        try gated("recordPlay(\(trackID))") {
+            recordedPlays.append(trackID)
+            return generation
         }
     }
 }

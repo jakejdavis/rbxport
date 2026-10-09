@@ -81,6 +81,11 @@ final class RowPager {
         }
     }
 
+    /// Whether a loaded page holds this track (so a change to it should refetch the rows).
+    func containsLoadedRow(id: String) -> Bool {
+        pages.values.contains { $0.contains { $0.id == id } }
+    }
+
     /// Waits for every page load in flight.
     func settle() async {
         while let task = loading.values.first {

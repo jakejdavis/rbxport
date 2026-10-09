@@ -162,6 +162,9 @@ struct StatusLine: View {
             if let progress = model.importProgress {
                 ImportProgressView(progress: progress)
             }
+            if model.analysis.statusText != nil {
+                AnalysisStatusView(queue: model.analysis)
+            }
             Spacer()
             if let notice = model.notice {
                 Text(notice).foregroundStyle(.primary)
@@ -243,5 +246,30 @@ struct ImportProgressView: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("import-progress")
+    }
+}
+
+
+/// The analysis queue in the status bar: progress, Stop while it runs, the failures after.
+struct AnalysisStatusView: View {
+    let queue: AnalysisQueue
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if queue.isActive, let fraction = queue.fraction {
+                ProgressView(value: fraction).progressViewStyle(.linear).frame(width: 90)
+            }
+            Text(queue.statusText ?? "")
+            if queue.isActive {
+                Button("Stop", systemImage: "stop.circle") { queue.cancel() }
+                    .labelStyle(.iconOnly).buttonStyle(.plain)
+                    .help("Stop analysing after the tracks in progress")
+            } else {
+                Button("Dismiss", systemImage: "xmark.circle.fill") { queue.reset() }
+                    .labelStyle(.iconOnly).buttonStyle(.plain)
+            }
+        }
+        .help(queue.failed.isEmpty ? "Analysis" : queue.failed.prefix(8).map { "\($0.title): \($0.reason)" }.joined(separator: "\n"))
+        .accessibilityLabel(queue.statusText ?? "Analysis")
     }
 }

@@ -46,6 +46,9 @@ struct MetadataEditingTests {
 
     /// Selects rows by index and waits for the ids of rows that are not loaded to arrive.
     private func select(_ model: AppModel, _ indexes: [Int]) async {
+        // Let the load's own events (a reload reopens the view and drops pending selections) finish first.
+        await model.waitUntilSettled()
+        await model.pager.settle()
         model.tableSelectionChanged(IndexSet(indexes), keepingUnloaded: false)
         await model.settleSelection()
         #expect(await eventually { model.selectedIDs.count == indexes.count })

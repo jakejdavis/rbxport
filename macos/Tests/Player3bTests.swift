@@ -404,12 +404,16 @@ struct ControlLogicTests {
         #expect(action("", PlayerKeymap.f9) == .metronomeSound)
     }
 
-    @Test func writesAreSwallowedNotPerformed() {
-        // M (store) and X (delete) are library writes: consumed, nothing done.
-        #expect(action("m") == .swallow && action("x") == .swallow)
-        // Cmd+1..3 (clear hot cue) and the grid editor's Cmd chords belong to the menus.
-        #expect(action("1", mods: .command) == nil)
-        #expect(action("", PlayerKeymap.left, mods: .command) == nil)
+    @Test func cueAndGridWritesHaveTheirKeys() {
+        // M stores and X deletes a memory cue; Cmd+1..3 clear a hot cue; Cmd+arrows shift the grid.
+        #expect(action("m") == .memoryStore && action("x") == .memoryDelete)
+        #expect(action("1", mods: .command) == .hotCueClear("A") && action("3", mods: .command) == .hotCueClear("C"))
+        #expect(action("", PlayerKeymap.left, mods: .command) == .gridShift(-1))
+        #expect(action("", PlayerKeymap.right, mods: .command) == .gridShift(1))
+        #expect(action("\\", mods: [.command, .option]) == .gridAlign)
+        // A held key does not repeat a write, and an idle deck ignores them.
+        #expect(action("1", mods: .command, repeating: true) == .swallow)
+        #expect(action("m", loaded: false) == nil)
         // Shift is deck B.
         #expect(action("q", mods: .shift) == nil)
     }

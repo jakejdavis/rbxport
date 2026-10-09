@@ -80,6 +80,8 @@ final class DeckModel {
     private(set) var beats = BeatGrid.empty
     /// Bumped when the grid changes, so drawn tiles know to redraw.
     private(set) var beatsVersion = 0
+    /// Bumped when the track is analysed again, so the waveforms are asked for afresh.
+    private(set) var analysisVersion = 0
     private(set) var cues: [DeckCue] = []
     private(set) var phrases: [PhraseSpan] = []
     private(set) var vocals = Data()
@@ -110,17 +112,21 @@ final class DeckModel {
     private(set) var zoomBars: Double {
         didSet { if zoomBars != oldValue { defaults.set(zoomBars, forKey: key("zoomBars")) } }
     }
+    /// Deck menu: a click on the overview seeks. Persisted, shared by both decks.
+    var waveformClick: Bool {
+        didSet { if waveformClick != oldValue { defaults.set(waveformClick, forKey: "deck.waveformClick") } }
+    }
     var timeMode: TimeMode {
         didSet { if timeMode != oldValue { defaults.set(timeMode.rawValue, forKey: key("timeMode")) } }
     }
 
     /// The drawn playhead's easing state; drawing must not invalidate views.
     @ObservationIgnored let display = DisplayClock()
-    @ObservationIgnored private let playback: any PlaybackEngine
+    @ObservationIgnored let playback: any PlaybackEngine
     @ObservationIgnored private let waveforms: WaveformService?
     @ObservationIgnored private let artworks: ArtworkService?
-    @ObservationIgnored private let defaults: UserDefaults
-    @ObservationIgnored private let now: () -> TimeInterval
+    @ObservationIgnored let defaults: UserDefaults
+    @ObservationIgnored let now: () -> TimeInterval
     @ObservationIgnored private var nextLoadID: UInt64 = 0
     /// After a local seek, ticks of the old generation are ignored until the engine confirms.
     @ObservationIgnored private var landing: (generation: UInt32, until: TimeInterval)?
@@ -129,11 +135,26 @@ final class DeckModel {
     @ObservationIgnored private var overviewTicket: WaveformService.Ticket?
     @ObservationIgnored private var overviewKey: WaveformService.Key?
     @ObservationIgnored private var artworkTicket: ArtworkService.Ticket?
-    @ObservationIgnored private let backend: (any BackendProtocol)?
+    @ObservationIgnored let backend: (any BackendProtocol)?
     @ObservationIgnored private var analysisTask: Task<Void, Never>?
     @ObservationIgnored private var detailTask: Task<Void, Never>?
     @ObservationIgnored private var detailKey: String?
     @ObservationIgnored private var pad = PadMachine()
+    // Slice 4c: library writes, wired by the player.
+    /// Whether the library may be written to right now (the core's write gate).
+    @ObservationIgnored var canWrite: () -> Bool = { false }
+    /// Where a failed write is reported; an empty string clears the message.
+    @ObservationIgnored var report: (String) -> Void = { _ in }
+    @ObservationIgnored var cueWriteInFlight = false
+    @ObservationIgnored var writeTask: Task<Void, Never>?
+    @ObservationIgnored var cuesRefresh: Task<Void, Never>?
+    @ObservationIgnored var gridRefresh: Task<Void, Never>?
+    @ObservationIgnored var playRecord: Task<Void, Never>?
+    @ObservationIgnored var playClock = PlayClock()
+    /// Record a play into the history after a minute (Settings: record history; on by default).
+    var recordsHistory: Bool { defaults.object(forKey: "recordHistory") as? Bool ?? true }
+    /// The beat-grid editor for the loaded track.
+    @ObservationIgnored lazy var grid = GridEditModel(deck: self)
     /// Ticks do not move the loop display until this, so a loop just set does not flicker.
     @ObservationIgnored private var loopHoldUntil: TimeInterval = 0
     /// Ticks do not move the playhead until this, after a scrub lets go.
@@ -169,6 +190,7 @@ final class DeckModel {
         let prefix = deck == .a ? "deckA" : "deckB"
         tempoRange = defaults.string(forKey: "\(prefix).tempoRange").flatMap(TempoRange.init) ?? .six
         timeMode = defaults.string(forKey: "\(prefix).timeMode").flatMap(TimeMode.init) ?? .elapsed
+        waveformClick = defaults.object(forKey: "deck.waveformClick") as? Bool ?? true
         let storedZoom = defaults.object(forKey: "\(prefix).zoomBars") as? Double
         zoomBars = storedZoom.map(DetailZoom.clamped) ?? DetailZoom.default
     }
@@ -212,6 +234,9 @@ final class DeckModel {
         cue = CueMachine(cueMs: Double(newTrack.memoryCues.min() ?? 0))
         pad = PadMachine()
         heldPad = nil
+        playClock.reset()
+        cueWriteInFlight = false
+        grid.trackChanged()
         resetAnalysis(for: newTrack)
         overview = nil
         overviewKey = nil
@@ -235,7 +260,9 @@ final class DeckModel {
         waveforms?.cancel(overviewTicket)
         overviewTicket = nil
         loadID = 0
+        playClock.reset()
         resetAnalysis(for: nil)
+        grid.trackChanged()
         synced = false
         onSyncInputChange?()
     }
@@ -285,6 +312,7 @@ final class DeckModel {
     func apply(tick t: DeckTick, sampleRate: UInt32, at time: TimeInterval, shiftsKey canShift: Bool = true) {
         guard loadID != 0, t.loadId == loadID, t.loaded else { return }
         if phase == .loading { phase = .ready }
+        notePlayTime(at: time)
         totalFrames = t.totalFrames
         if shiftsKey != canShift { shiftsKey = canShift }
         if time >= loopHoldUntil {
@@ -495,6 +523,21 @@ extension DeckModel {
         }
     }
 
+    /// The track was analysed (or analysed again): draw the new waveforms, grid and cues.
+    func reloadAnalysis(bpmX100: UInt32? = nil, durationSec: UInt32? = nil) {
+        guard var current = track else { return }
+        current.analysed = true
+        if let bpmX100, bpmX100 > 0 { current.bpmX100 = bpmX100 }
+        if let durationSec, durationSec > 0 { current.durationSec = durationSec }
+        track = current
+        overview = nil
+        overviewKey = nil
+        analysisVersion += 1
+        resetAnalysis(for: current)
+        playback.refreshMetronomeGrid(deck: deck)
+        Task { await grid.refresh() }
+    }
+
     /// Puts a beat grid on the deck (what the analysis fetch does when it arrives).
     func install(beats grid: BeatGrid) {
         beats = grid
@@ -567,7 +610,12 @@ extension DeckModel {
 
     /// A pad went down (or its key): jump to its cue, and from a pause play while it is held.
     func padPressed(_ letter: String) {
-        guard isLoaded, let target = CueLookup.hot(cues, letter: letter) else { return }
+        guard isLoaded else { return }
+        // An empty pad is set at the playhead; a set one is only ever called.
+        guard let target = CueLookup.hot(cues, letter: letter) else {
+            setHotCue(letter)
+            return
+        }
         cue.latch()
         let actions = pad.press(letter: letter, cueMs: target.positionMs, playing: anchor.playing)
         heldPad = pad.heldLetter

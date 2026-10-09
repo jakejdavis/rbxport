@@ -4058,10 +4058,13 @@ dependencies = [
 name = "rbl-app"
 version = "1.2.0"
 dependencies = [
+ "dirs 5.0.1",
  "libc",
  "midir",
  "parking_lot",
+ "rbl-analysis",
  "rbl-anlz",
+ "rbl-audio",
  "rbl-backup",
  "rbl-core",
  "rbl-db",

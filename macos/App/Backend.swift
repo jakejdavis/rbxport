@@ -24,6 +24,8 @@ protocol BackendProtocol: Sendable {
     func exportPlaylistFile(playlistID: String, path: String, format: PlaylistFileFormat) async throws -> UInt32
     /// The audio file of a track (or a loose `file:` id).
     func trackPath(id: String) async throws -> String
+    /// The same, answered at once, for a drag that needs the file as it begins. Nil when unknown.
+    nonisolated func trackPathSync(id: String) -> String?
     /// One track in full, for the info panel. Throws `NotFound` for a track that has gone.
     func trackDetails(id: String) async throws -> TrackDetails
     /// The lists the Info tab's pickers offer (keys, genres, My Tags).
@@ -93,6 +95,28 @@ protocol BackendProtocol: Sendable {
     func findDuplicates(limit: UInt32) async throws -> Duplicates
     func relocateTrack(id: String, path: String) async throws -> UInt32
     func autoRelocate(folders: [String]) async throws -> RelocateReport
+
+    // MARK: Phase 4c: cues, beat grid, analysis, plays. All behind the write gate.
+
+    /// Adds a cue at a position; returns its id. A refusal throws `FfiError.ReadOnly`.
+    func addCue(trackID: String, slot: CueSlot, positionMs: UInt32) async throws -> String
+    func addLoop(trackID: String, slot: CueSlot, inMs: UInt32, outMs: UInt32, beats: UInt16) async throws -> String
+    /// A hot cue takes a colour-table index; a memory cue its named index 0 to 7; nil resets.
+    func setCueColour(cueID: String, colour: UInt8?) async throws
+    func deleteCue(cueID: String) async throws
+    func convertMemoryCuesToHot(trackID: String) async throws -> UInt32
+    func gridState(trackID: String) async throws -> GridState
+    /// `fromMs` limits the edit to the beats from there on; `transaction` groups taps into one undo step.
+    func gridEdit(trackID: String, edit: GridEdit, fromMs: UInt32?, transaction: String?) async throws -> GridState
+    func gridUndo(trackID: String) async throws -> GridState
+    func gridRedo(trackID: String) async throws -> GridState
+    /// The analysis lock, on or off.
+    func gridLock(trackID: String, on: Bool) async throws -> GridState
+    /// Analyses one track (seconds of work; runs off the actor).
+    func analyseTrack(trackID: String, settings: AnalysisSettings, rekordboxMode: Bool) async throws -> AnalysisResult
+    /// Re-reads the library once, after a run of analyses.
+    func reloadLibrary() async throws -> UInt32
+    func recordPlay(trackID: String) async throws -> UInt32
 }
 
 /// Forwards the Rust core's callbacks into an `AsyncStream`.
@@ -168,6 +192,7 @@ actor Backend: BackendProtocol {
         try core.exportPlaylistFile(playlistId: playlistID, path: path, format: format)
     }
     func trackPath(id: String) async throws -> String { try core.trackPath(trackId: id) }
+    nonisolated func trackPathSync(id: String) -> String? { try? core.trackPath(trackId: id) }
     func trackDetails(id: String) async throws -> TrackDetails { try core.trackDetails(trackId: id) }
     func trackLookups() async throws -> TrackLookups { try core.trackLookups() }
     func waveform(id: String, kind: WaveformKind) async throws -> Data {
@@ -261,6 +286,36 @@ actor Backend: BackendProtocol {
         let core = core
         return try await Task.detached { try core.autoRelocate(folders: folders) }.value
     }
+
+    func addCue(trackID: String, slot: CueSlot, positionMs: UInt32) async throws -> String {
+        try core.addCue(trackId: trackID, slot: slot, positionMs: positionMs)
+    }
+    func addLoop(trackID: String, slot: CueSlot, inMs: UInt32, outMs: UInt32, beats: UInt16) async throws -> String {
+        try core.addLoop(trackId: trackID, slot: slot, inMs: inMs, outMs: outMs, beats: beats)
+    }
+    func setCueColour(cueID: String, colour: UInt8?) async throws { try core.setCueColour(cueId: cueID, colour: colour) }
+    func deleteCue(cueID: String) async throws { try core.deleteCue(cueId: cueID) }
+    func convertMemoryCuesToHot(trackID: String) async throws -> UInt32 {
+        try core.convertMemoryCuesToHot(trackId: trackID)
+    }
+    func gridState(trackID: String) async throws -> GridState { try core.gridState(trackId: trackID) }
+    func gridEdit(trackID: String, edit: GridEdit, fromMs: UInt32?, transaction: String?) async throws -> GridState {
+        try core.gridEdit(trackId: trackID, edit: edit, fromMs: fromMs, transaction: transaction)
+    }
+    func gridUndo(trackID: String) async throws -> GridState { try core.gridUndo(trackId: trackID) }
+    func gridRedo(trackID: String) async throws -> GridState { try core.gridRedo(trackId: trackID) }
+    func gridLock(trackID: String, on: Bool) async throws -> GridState { try core.gridLock(trackId: trackID, on: on) }
+    func analyseTrack(trackID: String, settings: AnalysisSettings, rekordboxMode: Bool) async throws -> AnalysisResult {
+        let core = core
+        return try await Task.detached {
+            try core.analyseTrack(trackId: trackID, settings: settings, rekordboxMode: rekordboxMode)
+        }.value
+    }
+    func reloadLibrary() async throws -> UInt32 {
+        let core = core
+        return try await Task.detached { try core.reloadLibrary() }.value
+    }
+    func recordPlay(trackID: String) async throws -> UInt32 { try core.recordPlay(trackId: trackID) }
 }
 
 func describe(_ error: Error) -> String {

@@ -39,6 +39,7 @@ struct TrackTable: NSViewRepresentable {
         }
         table.registerForDraggedTypes([.rbxportTracks, .fileURL])
         table.setDraggingSourceOperationMask([.copy, .move], forLocal: true)
+        table.setDraggingSourceOperationMask(.copy, forLocal: false)
         table.draggingDestinationFeedbackStyle = .gap
         context.coordinator.table = table
         context.coordinator.installHeaderMenu()
@@ -343,12 +344,13 @@ struct TrackTable: NSViewRepresentable {
         // MARK: Dragging tracks
 
         func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
-            // Dragging only edits playlists, so a locked library drags nothing.
-            guard model.canEdit else { return nil }
-            let item = NSPasteboardItem()
+            // The audio file always goes out, for Finder and other apps; the track id goes with
+            // it only while the library may be edited, since only playlists take track drops.
             // A row whose page is not loaded still takes part in the drag, as an empty placeholder.
-            item.setString(pager.peek(at: row)?.id ?? "", forType: .rbxportTracks)
-            return item
+            let id = pager.peek(at: row)?.id ?? ""
+            let backend = model.backend
+            let path = TrackDrag.path(for: id) { backend.trackPathSync(id: $0) }
+            return TrackDrag.pasteboardItem(id: id, path: path, canEdit: model.canEdit)
         }
 
         func tableView(

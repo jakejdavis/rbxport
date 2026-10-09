@@ -642,3 +642,121 @@ pub struct RelocateReport {
     /// Missing tracks whose file name was found in none of the folders.
     pub unresolved: u32,
 }
+
+/// Which slot a new cue goes in.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum CueSlot {
+    Memory,
+    /// A hot cue pad, `A` to `P`.
+    Hot { letter: String },
+}
+
+impl From<CueSlot> for rbl_app::cues::CueKind {
+    fn from(slot: CueSlot) -> Self {
+        match slot {
+            CueSlot::Memory => Self::Memory,
+            // An empty or long letter becomes a char the core refuses as Malformed.
+            CueSlot::Hot { letter } => Self::Hot(letter.chars().next().filter(|_| letter.chars().count() == 1).unwrap_or('?')),
+        }
+    }
+}
+
+/// A beat grid edit, as the GRID panel sends it.
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Enum)]
+pub enum GridEdit {
+    /// Shift every beat by this many milliseconds; positive is later.
+    Nudge { ms: i32 },
+    Double,
+    Halve,
+    /// Make the beat nearest this time the downbeat.
+    Downbeat { time_ms: u32 },
+    /// Re-space the grid at this tempo with a beat held at the anchor.
+    Tempo { bpm_x100: u16, anchor_ms: u32 },
+    Stretch { by_ms: i32, time_ms: u32 },
+    Tap { bpm: f64, anchor_ms: u32 },
+    Align { time_ms: u32 },
+}
+
+impl From<GridEdit> for rbl_app::grid::GridEdit {
+    fn from(edit: GridEdit) -> Self {
+        match edit {
+            GridEdit::Nudge { ms } => Self::Nudge { ms },
+            GridEdit::Double => Self::Double,
+            GridEdit::Halve => Self::Halve,
+            GridEdit::Downbeat { time_ms } => Self::Downbeat { time_ms },
+            GridEdit::Tempo { bpm_x100, anchor_ms } => Self::Tempo { bpm_x100, anchor_ms },
+            GridEdit::Stretch { by_ms, time_ms } => Self::Stretch { by_ms, time_ms },
+            GridEdit::Tap { bpm, anchor_ms } => Self::Tap { bpm, anchor_ms },
+            GridEdit::Align { time_ms } => Self::Align { time_ms },
+        }
+    }
+}
+
+/// A track's grid as the panel needs it.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct GridState {
+    pub bpm_x100: u32,
+    pub beats: u32,
+    pub can_undo: bool,
+    pub can_redo: bool,
+    pub undo_label: Option<String>,
+    pub redo_label: Option<String>,
+    /// The analysis lock (`Analysed` bit 0x80).
+    pub locked: bool,
+}
+
+impl From<rbl_app::grid::GridStateDto> for GridState {
+    fn from(g: rbl_app::grid::GridStateDto) -> Self {
+        Self {
+            bpm_x100: g.bpm_x100,
+            beats: g.beats,
+            can_undo: g.can_undo,
+            can_redo: g.can_redo,
+            undo_label: g.undo_label.map(str::to_owned),
+            redo_label: g.redo_label.map(str::to_owned),
+            locked: g.locked,
+        }
+    }
+}
+
+/// The Analysis Setting dialog's choices.
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+pub struct AnalysisSettings {
+    pub bpm_grid: bool,
+    pub key: bool,
+    pub high_precision: bool,
+    pub min_bpm: f64,
+    pub max_bpm: f64,
+}
+
+impl From<AnalysisSettings> for rbl_app::analysis::AnalysisSettings {
+    fn from(a: AnalysisSettings) -> Self {
+        Self { bpm_grid: a.bpm_grid, key: a.key, high_precision: a.high_precision, min_bpm: a.min_bpm, max_bpm: a.max_bpm }
+    }
+}
+
+/// What analysing one track produced.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct AnalysisResult {
+    pub track_id: String,
+    pub analysed: u8,
+    pub bpm_x100: u32,
+    pub key: String,
+    pub beats: u32,
+    pub duration_sec: u32,
+    pub elapsed_ms: u64,
+}
+
+impl From<rbl_app::analysis::AnalysisResultDto> for AnalysisResult {
+    fn from(a: rbl_app::analysis::AnalysisResultDto) -> Self {
+        Self {
+            track_id: a.track_id,
+            analysed: a.analysed,
+            bpm_x100: a.bpm_x100,
+            key: a.key,
+            beats: a.beats,
+            duration_sec: a.duration_sec,
+            elapsed_ms: a.elapsed_ms,
+        }
+    }
+}

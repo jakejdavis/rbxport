@@ -449,14 +449,20 @@ struct PhraseSpan: Equatable, Sendable {
 // MARK: - Keys
 
 /// What a key means to a deck: A as typed, B with Shift. The Player group of
-/// `src/lib/shortcuts.ts`, less what is a library write (set/clear hot cues, store/delete memory
-/// cues: Phase 4) and the grid editor.
+/// `src/lib/shortcuts.ts`: cue writes (1 to 3 set, Command-1 to 3 clear, M store, X delete) and
+/// the grid shift keys (Command-arrows) go through the core's write gate.
 enum PlayerKeyAction: Equatable, Sendable {
     case togglePlay
     case cueDown, cueUp
     case quantize
     case memoryPrevious, memoryNext
     case memoryNumber(Int)
+    /// M and X: store the cue point (or the active loop) and delete the memory cue under the playhead.
+    case memoryStore, memoryDelete
+    /// Command-1 to 3: Clear Hot Cue A to C.
+    case hotCueClear(String)
+    /// Command-Left and Command-Right shift the grid; Command-Option-\\ aligns it to the playhead.
+    case gridShift(Int), gridAlign
     case hotCueDown(String), hotCueUp
     case loopIn, loopOut, reloop
     case beatLoop(Double)
@@ -529,6 +535,13 @@ enum PlayerKeymap {
 
         // Option+\ doubles the loop; every other chord with a modifier is the menus'.
         if mods == .option, c == "\\" { return loaded ? (isRepeat ? .swallow : .loopDouble) : nil }
+        // Grid and hot cue clears are Command chords.
+        if mods == .command, loaded {
+            if ["1", "2", "3"].contains(c) { return isRepeat ? .swallow : .hotCueClear(["A", "B", "C"][Int(c)! - 1]) }
+            if chord.keyCode == left { return .gridShift(-1) }
+            if chord.keyCode == right { return .gridShift(1) }
+        }
+        if mods == [.command, .option], c == "\\", loaded { return isRepeat ? .swallow : .gridAlign }
         guard mods.isEmpty else { return nil }
 
         switch chord.keyCode {
@@ -552,7 +565,8 @@ enum PlayerKeymap {
         case "q": return .quantize
         case "b": return .memoryPrevious
         case "n": return .memoryNext
-        case "m", "x": return .swallow  // store and delete a memory cue: library writes, Phase 4
+        case "m": return .memoryStore
+        case "x": return .memoryDelete
         case "i": return .loopIn
         case "o": return .loopOut
         case "r": return .reloop

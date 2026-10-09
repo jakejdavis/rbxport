@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use rbl_db::fixture::playlist_id;
 use rbl_ffi::{
     Core, EventListener, ExtraColumn, FfiError, LibraryEvent, LoadOutcome, NodeKind, SearchField, SortKey,
-    BpmFilter, PlaylistFileFormat, TrackFilter, TrackSource, ViewSpec, MAX_ROWS,
+    AnalysisSettings, BpmFilter, CueSlot, GridEdit, PlaylistFileFormat, TrackFilter, TrackSource, ViewSpec, MAX_ROWS,
 };
 
 #[derive(Default)]
@@ -458,4 +458,96 @@ fn files_import_with_progress_and_missing_files_relocate_over_the_bridge() {
     assert_eq!(core.find_duplicates(5).unwrap().groups, 0);
     core.remove_from_collection(vec![rbl_db::fixture::track_id(2)]).unwrap();
     assert_eq!(core.summary().unwrap().track_count, 40);
+}
+
+/// A mono 16-bit WAV with a click every half second.
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn click_wav(path: &std::path::Path, seconds: u32) {
+    let rate = 22_050_u32;
+    let period = rate / 2;
+    let mut data = Vec::new();
+    for i in 0..rate * seconds {
+        let since = i % period;
+        let sample: i16 = if since < 400 { (20_000.0 * (1.0 - since as f32 / 400.0)) as i16 } else { 0 };
+        data.extend_from_slice(&sample.to_le_bytes());
+    }
+    let len = data.len() as u32;
+    let mut out = b"RIFF".to_vec();
+    out.extend_from_slice(&(36 + len).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    for v in [16_u32.to_le_bytes().as_slice(), &1_u16.to_le_bytes(), &1_u16.to_le_bytes(), &rate.to_le_bytes(), &(rate * 2).to_le_bytes(), &2_u16.to_le_bytes(), &16_u16.to_le_bytes()] {
+        out.extend_from_slice(v);
+    }
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&len.to_le_bytes());
+    out.extend_from_slice(&data);
+    std::fs::write(path, out).unwrap();
+}
+
+#[test]
+fn analysis_cues_grid_and_plays_pass_the_gate_over_the_bridge() {
+    let (dir, core, events) = core();
+    let track = rbl_db::fixture::track_id(5);
+    let wav = dir.path().join("click.wav");
+    click_wav(&wav, 12);
+    let location = rbl_db::LibraryLocation {
+        master_db: dir.path().join("master.db"),
+        share_root: dir.path().join("share"),
+        passphrase: rbl_db::fixture::FIXTURE_PASSPHRASE.to_owned(),
+        is_real_install: false,
+    };
+    rbl_db::fixture::point_at_audio(&location, 5, wav.to_str().unwrap(), 12).unwrap();
+    assert_eq!(core.load_library(), LoadOutcome::Ready);
+    assert!(core.is_fixture_library());
+    let settings = AnalysisSettings { bpm_grid: true, key: true, high_precision: true, min_bpm: 70.0, max_bpm: 180.0 };
+
+    // Every write is refused while Library Protection is on, and nothing is announced.
+    let before = events.0.lock().unwrap().len();
+    assert!(matches!(core.analyse_track(track.clone(), settings, false), Err(FfiError::ReadOnly { .. })));
+    assert!(matches!(core.add_cue(track.clone(), CueSlot::Memory, 1_000), Err(FfiError::ReadOnly { .. })));
+    assert!(matches!(core.grid_lock(track.clone(), true), Err(FfiError::ReadOnly { .. })));
+    assert!(matches!(core.record_play(track.clone()), Err(FfiError::ReadOnly { .. })));
+    assert_eq!(events.0.lock().unwrap().len(), before);
+
+    core.set_protect_library(false);
+    let result = core.analyse_track(track.clone(), settings, false).unwrap();
+    assert!(result.bpm_x100 > 0 && result.beats > 0);
+    assert!(events.0.lock().unwrap().iter().any(|e| matches!(e, LibraryEvent::AnalysisChanged { track_id } if *track_id == track)));
+    core.load_library();
+    assert!(!core.track_beats(track.clone()).unwrap().is_empty());
+
+    let hot = core.add_cue(track.clone(), CueSlot::Hot { letter: "B".into() }, 2_000).unwrap();
+    core.add_cue(track.clone(), CueSlot::Memory, 4_000).unwrap();
+    core.set_cue_colour(hot.clone(), Some(49)).unwrap();
+    assert!(matches!(core.add_cue(track.clone(), CueSlot::Hot { letter: "Z".into() }, 1), Err(FfiError::Malformed { .. })));
+    assert_eq!(core.track_cues(track.clone()).unwrap().len(), 2);
+    core.delete_cue(hot).unwrap();
+    assert_eq!(core.track_cues(track.clone()).unwrap().len(), 1);
+    assert!(events.0.lock().unwrap().iter().any(|e| matches!(e, LibraryEvent::CuesChanged { .. })));
+
+    let first = core.track_beats(track.clone()).unwrap()[0].time_ms;
+    let state = core.grid_edit(track.clone(), GridEdit::Nudge { ms: 5 }, None, None).unwrap();
+    assert!(state.can_undo && !state.locked);
+    assert_ne!(core.track_beats(track.clone()).unwrap()[0].time_ms, first);
+    let state = core.grid_undo(track.clone()).unwrap();
+    assert!(state.can_redo);
+    assert_eq!(core.track_beats(track.clone()).unwrap()[0].time_ms, first);
+    assert!(core.grid_lock(track.clone(), true).unwrap().locked);
+    assert!(matches!(core.grid_edit(track.clone(), GridEdit::Double, None, None), Err(FfiError::ReadOnly { .. })));
+
+    core.record_play(track.clone()).unwrap();
+}
+
+/// Prepares a fixture directory for the manual screenshot run: a 40 s click track on the first
+/// track, ready to analyse. Run with `RBXPORT_PREP_DIR=<empty temp dir> cargo test -p rbl-ffi
+/// --test bridge prepare_demo_fixture -- --ignored`. Refuses anything but a fixture.
+#[test]
+#[ignore = "manual fixture preparation"]
+fn prepare_demo_fixture() {
+    let dir = std::path::PathBuf::from(std::env::var("RBXPORT_PREP_DIR").expect("RBXPORT_PREP_DIR"));
+    let location = rbl_db::fixture::build(&dir, rbl_db::fixture::Shape::default()).unwrap();
+    assert!(!location.is_real_install);
+    let wav = dir.join("demo-click.wav");
+    click_wav(&wav, 40);
+    rbl_db::fixture::point_at_audio(&location, 0, wav.to_str().unwrap(), 40).unwrap();
 }

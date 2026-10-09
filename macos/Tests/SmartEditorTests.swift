@@ -168,7 +168,8 @@ struct SmartEditorTests {
         #expect(model.smartEditor == nil)
         #expect(await backend.editLog == ["saveSmartPlaylist(3,Peakier)"])
         #expect(await eventually { model.sidebar.node(withID: "pl:3")?.name == "Peakier" })
-        #expect(model.editHistory.undoLabel == "Rename Playlist")
+        // The history arrives as an event of its own, after the save returns.
+        #expect(await eventually { model.editHistory.undoLabel == "Rename Playlist" })
     }
 
     @Test func aReadOnlyRuleOnlyRenames() async {

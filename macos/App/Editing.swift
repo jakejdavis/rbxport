@@ -458,6 +458,9 @@ extension AppModel {
         await refreshSummary()
         switch name {
         case "create-playlist": break
+        case "cues":
+            await runCueDemo()
+            return
         case "metadata", "missing", "duplicates":
             await runMetadataDemo(name)
             return
@@ -480,5 +483,41 @@ extension AppModel {
             conditions: [SmartCondition(property: "rating", operator: "3", left: "2", right: "", unit: "")])
         _ = await performEdit { try await backend.createSmartPlaylist(name: "Four Stars Up", parent: "root", rule: rule) }
         await reveal(nodeID: "pl:\(playlist)", rename: false)
+    }
+}
+
+extension AppModel {
+    /// Fixture-only screenshot hook (`RBXPORT_DEMO_EDIT=cues`): analyses the first track, loads it
+    /// onto deck A and sets hot cues A and B, a memory cue and a memory loop through the gate.
+    func runCueDemo() async {
+        guard await backend.isFixtureLibrary() else { return }
+        let spec = ViewSpec(
+            source: .collection, sort: .trackNo, descending: false, query: "", searchField: .all,
+            filter: TrackFilter(bpm: nil, keys: nil, ratings: nil, colors: nil))
+        guard let handle = try? await backend.openView(spec),
+            let id = try? await backend.viewIDsInRange(viewID: handle.viewId, from: 0, to: 0).first
+        else { return }
+        player.load(trackID: id, row: nil)
+        analysis.enqueue([AnalysisItem(id: id, title: "Demo track")])
+        await analysis.waitUntilDrained()
+        if let failure = analysis.failed.first {
+            notice = "Demo analysis failed: \(failure.reason)"
+            return
+        }
+        _ = await eventuallyLoaded()
+        let backend = backend
+        _ = await performEdit { try await backend.addCue(trackID: id, slot: .hot(letter: "A"), positionMs: 4_000) }
+        _ = await performEdit { try await backend.addCue(trackID: id, slot: .hot(letter: "B"), positionMs: 12_000) }
+        _ = await performEdit { try await backend.addCue(trackID: id, slot: .memory, positionMs: 8_000) }
+        _ = await performEdit { try await backend.addLoop(trackID: id, slot: .memory, inMs: 16_000, outMs: 20_000, beats: 8) }
+        notice = "Demo: analysed, 2 hot cues, a memory cue and a memory loop."
+    }
+
+    private func eventuallyLoaded() async -> Bool {
+        for _ in 0..<100 {
+            if player.deckA.isLoaded { return true }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return false
     }
 }

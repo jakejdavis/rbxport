@@ -3,7 +3,7 @@ import SwiftUI
 // The deck's control clusters from slice 3b: pads, memory cues, loops, beat jump, key shift,
 // quantize, metronome, zoom and the phrase strip.
 
-private let writesLater = "Editing cues writes to the library, which arrives with Phase 4."
+private let readOnlyReason = "The library is read-only. Check Library Protection in Settings, and quit rekordbox to edit."
 
 extension Color {
     init(_ rgb: RGB) { self.init(red: Double(rgb.r) / 255, green: Double(rgb.g) / 255, blue: Double(rgb.b) / 255) }
@@ -12,7 +12,7 @@ extension Color {
 // MARK: - Hot cue pads
 
 /// Pads A to H. A set pad jumps to its cue (playing from it while held, from a pause); an empty
-/// pad is dim, since setting one is a library write.
+/// pad sets a hot cue at the playhead. Right-click a set pad to delete it or recolour it.
 struct PadRow: View {
     let deck: DeckModel
     var compact = false
@@ -57,7 +57,24 @@ private struct Pad: View {
                         deck.padReleased()
                     }
             )
-            .help(cue == nil ? "Hot cue \(letter) is empty. \(writesLater)" : "Hot cue \(letter): hold to play from it (\(letter == "A" ? "1" : letter == "B" ? "2" : letter == "C" ? "3" : "click"))")
+            .contextMenu {
+                if let cue, !cue.id.isEmpty {
+                    Button("Delete") { deck.deleteCue(cue) }
+                    Menu("Color") {
+                        ForEach(CueColours.hot, id: \.value) { entry in
+                            Button { deck.recolour(cue, to: entry.value) } label: {
+                                Label { Text("Color \(entry.value)") } icon: { Image(nsImage: CueColours.swatch(entry.hex)) }
+                            }
+                        }
+                        Divider()
+                        Button("Reset") { deck.recolour(cue, to: nil) }
+                    }
+                    .disabled(!deck.canEditCues)
+                }
+            }
+            .help(cue == nil
+                ? "Hot cue \(letter) is empty: press to set it at the playhead\(deck.canWrite() ? "" : ". \(readOnlyReason)")"
+                : "Hot cue \(letter): hold to play from it (\(letter == "A" ? "1" : letter == "B" ? "2" : letter == "C" ? "3" : "click")); right-click to delete or recolour")
             .accessibilityLabel("Hot cue \(letter)")
             .accessibilityValue(cue == nil ? "empty" : "set")
             .accessibilityAddTraits(.isButton)
@@ -65,7 +82,7 @@ private struct Pad: View {
     }
 }
 
-/// Memory cue navigation, with the writes greyed.
+/// Memory cue navigation, store and delete.
 struct MemoryCueButtons: View {
     let deck: DeckModel
 
@@ -80,8 +97,14 @@ struct MemoryCueButtons: View {
                 .buttonStyle(ControlButtonStyle(width: 26))
                 .disabled(!deck.isLoaded || deck.memoryCues.isEmpty)
                 .help("Next memory cue (N)")
-            Button("SET") {}.buttonStyle(ControlButtonStyle(width: 30)).disabled(true).help("Set memory cue (M). \(writesLater)")
-            Button("DEL") {}.buttonStyle(ControlButtonStyle(width: 30)).disabled(true).help("Delete memory cue (X). \(writesLater)")
+            Button("SET") { deck.storeMemoryCue() }
+                .buttonStyle(ControlButtonStyle(width: 30))
+                .disabled(!deck.canEditCues)
+                .help(deck.loop?.active == true ? "Store the active loop as a memory loop (M)" : "Set memory cue at the cue point (M)")
+            Button("DEL") { deck.deleteMemoryAtHead() }
+                .buttonStyle(ControlButtonStyle(width: 30))
+                .disabled(!deck.canEditCues || CueLookup.memoryCue(deck.cues, at: deck.position(at: deck.now()) * 1000) == nil)
+                .help("Delete the memory cue under the playhead (X)")
         }
     }
 }
@@ -311,5 +334,48 @@ struct ControlButtonStyle: ButtonStyle {
             .frame(width: width, height: height)
             .background(lit ? PlayerStyle.accent : PlayerStyle.button, in: .rect(cornerRadius: 3))
             .opacity(enabled ? (configuration.isPressed ? 0.7 : 1) : 0.35)
+    }
+}
+
+
+// MARK: - Beat grid editing
+
+/// The GRID panel's buttons: shift, MARK, double and halve, tempo, TAP, undo and the analysis lock.
+struct GridControls: View {
+    let deck: DeckModel
+    var body: some View {
+        let grid = deck.grid
+        HStack(spacing: 4) {
+            Text("GRID").font(.system(size: 8, weight: .bold)).foregroundStyle(PlayerStyle.dim)
+            Button { grid.shift(-1) } label: { Image(systemName: "chevron.left") }
+                .buttonStyle(ControlButtonStyle(width: 22))
+                .help("Shift the beat grid 1 ms earlier (Command-Left)")
+            Button("MARK") { grid.mark() }
+                .buttonStyle(ControlButtonStyle(width: 42))
+                .help("Make the beat nearest the playhead the downbeat")
+            Button { grid.shift(1) } label: { Image(systemName: "chevron.right") }
+                .buttonStyle(ControlButtonStyle(width: 22))
+                .help("Shift the beat grid 1 ms later (Command-Right)")
+            Button("x2") { grid.double() }.buttonStyle(ControlButtonStyle(width: 26)).help("Double the tempo")
+            Button("\u{00F7}2") { grid.halve() }.buttonStyle(ControlButtonStyle(width: 26)).help("Halve the tempo")
+            Button(grid.tapBpmX100.map { String(format: "TAP %.1f", Double($0) / 100) } ?? "TAP") { grid.tap() }
+                .buttonStyle(ControlButtonStyle(width: grid.tapBpmX100 == nil ? 34 : 64, lit: grid.tapBpmX100 != nil))
+                .help("Tap the tempo")
+            Button { grid.undo() } label: { Image(systemName: "arrow.uturn.backward") }
+                .buttonStyle(ControlButtonStyle(width: 22))
+                .disabled(grid.state?.canUndo != true)
+                .help(grid.state?.undoLabel.map { "Undo \($0)" } ?? "Undo grid edit")
+            Button { grid.redo() } label: { Image(systemName: "arrow.uturn.forward") }
+                .buttonStyle(ControlButtonStyle(width: 22))
+                .disabled(grid.state?.canRedo != true)
+                .help(grid.state?.redoLabel.map { "Redo \($0)" } ?? "Redo grid edit")
+            Button { grid.toggleLock() } label: { Image(systemName: grid.locked ? "lock.fill" : "lock.open") }
+                .buttonStyle(ControlButtonStyle(width: 24, lit: grid.locked))
+                .help(grid.locked ? "Analysis is locked: unlock to edit" : "Lock the analysis")
+        }
+        .disabled(!deck.isLoaded || !grid.hasGrid)
+        .opacity(grid.hasGrid ? 1 : 0.5)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Beat grid")
     }
 }

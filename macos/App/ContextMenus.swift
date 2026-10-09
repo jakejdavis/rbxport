@@ -29,6 +29,10 @@ enum MenuCommand: Equatable, Sendable {
     case removeFromHistory
     /// Colour 1 to 8, or 0 for none, on the selection.
     case setColor(UInt8)
+    // Phase 4c.
+    case analyse
+    case analysisLock(Bool)
+    case convertMemoryToHot
 }
 
 struct MenuItemSpec: Equatable {
@@ -104,8 +108,11 @@ enum ContextMenus {
                     ])),
             .separator,
             context.editable && context.hasLoose ? live("Import To Collection", .importToCollection) : grey("Import To Collection"),
-            grey("Analyze Track"),
-            grey("Analysis Lock", [grey("On"), grey("Off")]),
+            edit("Analyze Track", .analyse),
+            .item(
+                MenuItemSpec(
+                    title: "Analysis Lock", command: nil,
+                    submenu: [edit("On", .analysisLock(true)), edit("Off", .analysisLock(false))])),
             .separator,
             addToPlaylist(context),
             edit("Add To Tag List", .addToTagList),
@@ -120,7 +127,7 @@ enum ContextMenus {
             edit("Reset DJ Play Count", .resetPlayCount),
             grey("Add New Analysis Data"),
         ]
-        if !context.inExplorer { rows.append(grey("Convert Memory Cues to Hot Cues")) }
+        if !context.inExplorer { rows.append(edit("Convert Memory Cues to Hot Cues", .convertMemoryToHot)) }
         rows += [
             .separator,
             context.inTagList
