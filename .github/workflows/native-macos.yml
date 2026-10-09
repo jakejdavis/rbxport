@@ -1,0 +1,61 @@
+name: Native macOS
+
+# CI for the SwiftUI/UniFFI port under macos/. Independent of the release workflows.
+on:
+  push:
+    paths:
+      - "macos/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/native-macos.yml"
+  pull_request:
+    paths:
+      - "macos/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/native-macos.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  native:
+    name: Build and test
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Rust tests (rbl-app, rbl-ffi)
+        run: cargo test -p rbl-app -p rbl-ffi
+
+      - name: Build the Rust bridge
+        run: macos/scripts/build-rust.sh debug
+
+      - name: Generate the Xcode project
+        working-directory: macos
+        run: xcodegen generate
+
+      - name: Build and test the app
+        working-directory: macos
+        run: |
+          xcodebuild -scheme rbxport -configuration Debug -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM="" \
+            build test

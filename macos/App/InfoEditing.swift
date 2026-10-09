@@ -12,8 +12,8 @@ struct InfoEditForm: View {
     }
 
     var body: some View {
-        Form {
-            Section("Track") {
+        InfoList {
+            InfoSection("Track") {
                 InfoTextField(label: L10n.t("Track Title"), value: details.title, commit: commit(.title))
                 InfoTextField(label: L10n.t("Artist"), value: details.artist, commit: commit(.artist))
                 InfoTextField(label: L10n.t("Album"), value: details.album, commit: commit(.album))
@@ -26,7 +26,7 @@ struct InfoEditForm: View {
                 InfoTextField(label: L10n.t("Label"), value: details.label, commit: commit(.label))
                 InfoTextField(label: L10n.t("Genre"), value: details.genre, commit: commit(.genre))
             }
-            Section("Musical") {
+            InfoSection("Musical") {
                 InfoFixed(label: L10n.t("BPM"), value: CellFormat.bpm(details.bpmX100))
                 KeyPicker(selected: details.key, keys: model.lookups?.keys ?? [], commit: commit(.key))
                 InfoTextField(label: L10n.t("Year"), value: details.year > 0 ? String(details.year) : "", numeric: true, commit: commit(.year))
@@ -39,7 +39,7 @@ struct InfoEditForm: View {
                     commit: commit(.discNumber))
                 InfoFixed(label: L10n.t("Time"), value: CellFormat.duration(details.durationSec))
             }
-            Section("Library") {
+            InfoSection("Library") {
                 LabeledContent("Rating") {
                     StarRating(rating: details.rating) { stars in
                         Task { await model.edit(.rating(RatingClick.result(current: details.rating, clicked: stars))) }
@@ -59,10 +59,9 @@ struct InfoEditForm: View {
                 InfoFixed(label: L10n.t("Publish track information"), value: details.publish ? L10n.t("Yes") : L10n.t("No"))
             }
             ForEach(InfoFormat.infoSections(details, myTagNames: model.myTagNames).filter { $0.title == L10n.t("File") }, id: \.title) { section in
-                Section(section.title) { ForEach(section.facts, id: \.label) { InfoFixed(label: $0.label, value: $0.value) } }
-            }
+                InfoSection(section.title) { ForEach(section.facts, id: \.label) { InfoFixed(label: $0.label, value: $0.value) } }
+                    }
         }
-        .formStyle(.grouped)
         .accessibilityIdentifier("info-editor")
     }
 }

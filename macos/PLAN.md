@@ -46,3 +46,36 @@ Phases 2, 4, 5, 6 are largely independent after Phase 1 and can run in parallel 
 2. Build (Sonnet): rbl-app/rbl-ffi additions with Rust tests, Swift UI, Swift unit tests against the mock.
 3. Review (orchestrator): diff review, `cargo clippy/test`, `xcodebuild`, launch check; user eyeballs UI.
 4. Commit one slice per commit.
+
+## Status
+
+Phases 0-6 are done on branch `native-macos-spike`; the React/Tauri app is untouched and still builds.
+
+- 0 Spike: `3b7d3a8`
+- 1 Foundation (rbl-app extraction, Swift `Backend` actor, events): `13c8fa2`, `35c408e`
+- 2 Browse parity (table, filters, sidebar, context menus, info panel, artwork): `a1a6c07`, `a65f2ca`, `d1785cd`
+- 3 Player (deck A, waveforms, cues, loops, grid, dual deck, mixer): `22192df`, `3ff707e`, `a9e650f`
+- 4 Library editing (write gate, undo/redo, playlists, metadata, import, analysis, drag-out): `2a0a966`, `e2a1d7a`, `5f8acff`
+- 5 Devices (USB export, Sync Manager, USB/iTunes import, Pro DJ Link): `bb084de`, `cbb4cbb`, `686b523`
+- 6 App chrome (prefs, menus, keymap, backups, bug report, AppleScript, localisation): `460df80`, `f78df2c`, `70ca20f`, `09619f5`
+- 7 prep (uncommitted at time of writing): narrow-window player layouts, sidebar icon tint, deck-key window guard,
+  `macos/scripts/package.sh` (Release app + DMG, optional notarization), `.github/workflows/native-macos.yml`.
+
+### Known gaps and deferred items
+
+- 2 PLAYER layout has no GRID row or memory SET/DEL buttons (the keys work); narrow rows also drop loop halve/double,
+  the beat-jump size menu and then the Q/metronome chips.
+- Apple silicon only (`ARCHS: arm64`); no universal build.
+- Hardened runtime is off and signing is the personal Apple Development team: notarization needs a Developer ID
+  identity and `ENABLE_HARDENED_RUNTIME: YES` (plus any entitlements the audio and AppleScript paths need).
+- AppleScript has unit tests only; it has not been exercised through a real Automation grant.
+- Live Pro DJ Link, real USB export and real audio output are covered by mocks and fixtures, not by hardware runs.
+- The CI workflow has not run on GitHub yet.
+- No auto-updater (by design).
+
+### Cutover steps (waiting for the owner's go-ahead; none done)
+
+1. Delete `src-tauri/src` and `src/` (the React reference app).
+2. Move the shared crates out of the Tauri-shaped layout (workspace members, `rbxport` crate, root `Cargo.toml`).
+3. Switch CI: retire the Tauri release workflows in favour of `native-macos.yml` plus a release job that runs `package.sh`.
+4. Set up a Developer ID identity and notary profile (`NOTARY_PROFILE`), enable hardened runtime, notarize and staple.

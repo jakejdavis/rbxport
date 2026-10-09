@@ -15,7 +15,7 @@ final class BackupsModel {
     /// Opens a folder in the Finder; replaced in tests.
     @ObservationIgnored var openFolder: (URL) -> Void = { NSWorkspace.shared.open($0) }
     /// Shows an archive selected in the Finder; replaced in tests.
-    @ObservationIgnored var revealFile: (URL) -> Void = { NSWorkspace.shared.activateFileViewerSelecting([$0]) }
+    @ObservationIgnored var revealFile: (URL) -> Void = { revealInFileViewer([$0]) }
 
     private(set) var backups: [BackupInfo] = []
     private(set) var progress: BackupProgress?

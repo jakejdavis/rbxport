@@ -182,7 +182,7 @@ final class AppModel {
     /// The height of table rows for the shown columns: compact unless a column draws images.
     var rowHeight: CGFloat { RowSize.height(for: layout, preference: rowSize) }
     /// Reveals files in the Finder; replaced in tests.
-    var reveal: ([URL]) -> Void = { NSWorkspace.shared.activateFileViewerSelecting($0) }
+    var reveal: ([URL]) -> Void = { revealInFileViewer($0) }
     var query = "" {
         didSet { if query != oldValue { scheduleSearch() } }
     }

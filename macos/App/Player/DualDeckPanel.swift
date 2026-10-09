@@ -8,7 +8,7 @@ struct DualDeckPanel: View {
     let palette: WaveformPalette
 
     /// Narrower than this and the panel scrolls sideways, as the one-deck panel does.
-    static let contentWidth = 940.0
+    static let contentWidth = 720.0
 
     var body: some View {
         GeometryReader { geometry in
@@ -112,16 +112,26 @@ struct CompactDeck: View {
     /// Transport, hot cue pads, loops, beat jump, Q and the metronome: the pads and loop buttons
     /// are native additions (the React dual deck leaves them out).
     private var controls: some View {
-        HStack(spacing: 8) {
-            CueButton(deck: deck, compact: true)
-            PlayButton(deck: deck, compact: true, toggle: { player.togglePlay(deck.deck) })
-            PadRow(deck: deck, compact: true)
-            LoopControls(deck: deck)
-            JumpControls(deck: deck)
-            ModeChips(deck: deck)
-            Spacer(minLength: 0)
+        ViewThatFits(in: .horizontal) {
+            controlRow(pad: nil, condensed: false, jumpSize: true, chips: true)
+            controlRow(pad: 24, condensed: true, jumpSize: false, chips: true)
+            controlRow(pad: 24, condensed: true, jumpSize: false, chips: false)
         }
         .frame(height: 32)
+    }
+
+    /// One row of controls; the narrower variants drop the loop halve and double buttons, the
+    /// jump size menu and then the mode chips, in that order, to keep the deck on one row.
+    private func controlRow(pad: CGFloat?, condensed: Bool, jumpSize: Bool, chips: Bool) -> some View {
+        HStack(spacing: condensed ? 6 : 8) {
+            CueButton(deck: deck, compact: true)
+            PlayButton(deck: deck, compact: true, toggle: { player.togglePlay(deck.deck) })
+            PadRow(deck: deck, compact: true, padWidth: pad)
+            LoopControls(deck: deck, condensed: condensed)
+            JumpControls(deck: deck, showsSize: jumpSize)
+            if chips { ModeChips(deck: deck) }
+            Spacer(minLength: 0)
+        }
     }
 
     private var detail: some View {

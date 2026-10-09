@@ -177,9 +177,9 @@ struct MixerSeam: View {
 
     var body: some View {
         @Bindable var player = player
-        HStack(alignment: .center, spacing: 14) {
+        HStack(alignment: .center, spacing: 8) {
             ChannelStripView(player: player, which: .a)
-            Spacer(minLength: 8)
+            Spacer(minLength: 4)
             VStack(spacing: 4) {
                 Button("DUAL CONTROL") { player.dualControl.toggle() }
                     .buttonStyle(ControlButtonStyle(width: 104, height: 18, lit: player.dualControl))
@@ -188,11 +188,11 @@ struct MixerSeam: View {
                     .accessibilityValue(player.dualControl ? "on" : "off")
                 HStack(spacing: 6) {
                     Text("A").font(.system(size: 10, weight: .bold)).foregroundStyle(PlayerStyle.dim)
-                    CrossfaderView(mixer: player.mixer).frame(width: 190)
+                    CrossfaderView(mixer: player.mixer).frame(minWidth: 100, idealWidth: 190, maxWidth: 190)
                     Text("B").font(.system(size: 10, weight: .bold)).foregroundStyle(PlayerStyle.dim)
                 }
             }
-            Spacer(minLength: 8)
+            Spacer(minLength: 4)
             ChannelStripView(player: player, which: .b)
         }
         .padding(.horizontal, 12).padding(.vertical, 4)

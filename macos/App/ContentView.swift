@@ -9,7 +9,10 @@ struct ContentView: View {
         Group {
             content
         }
-        .background(WindowAccessor { model.windowGeometry.attach($0) })
+        .background(WindowAccessor {
+            model.windowGeometry.attach($0)
+            model.player.mainWindow = $0
+        })
         .sheet(item: $model.newLibrary) { NewLibrarySheet(model: $0) }
         .onChange(of: model.reportWindowRequests) { openWindow(id: BugReportScene.id) }
     }

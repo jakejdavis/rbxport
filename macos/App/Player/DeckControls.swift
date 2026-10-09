@@ -16,11 +16,13 @@ extension Color {
 struct PadRow: View {
     let deck: DeckModel
     var compact = false
+    /// Overrides the pad width (the narrow two-deck rows squeeze the pads).
+    var padWidth: CGFloat?
 
     var body: some View {
         HStack(spacing: 3) {
             ForEach(CueLookup.padLetters, id: \.self) { letter in
-                Pad(deck: deck, letter: letter, cue: CueLookup.hot(deck.cues, letter: letter), compact: compact)
+                Pad(deck: deck, letter: letter, cue: CueLookup.hot(deck.cues, letter: letter), compact: compact, width: padWidth)
             }
         }
     }
@@ -31,6 +33,7 @@ private struct Pad: View {
     let letter: String
     let cue: DeckCue?
     var compact = false
+    var width: CGFloat?
     @State private var pressed = false
 
     var body: some View {
@@ -39,7 +42,7 @@ private struct Pad: View {
         Text(letter)
             .font(.system(size: 13, weight: .bold))
             .foregroundStyle(cue == nil ? PlayerStyle.dim.opacity(0.5) : .black)
-            .frame(width: compact ? 26 : 30, height: compact ? 28 : 34)
+            .frame(width: width ?? (compact ? 26 : 30), height: compact ? 28 : 34)
             .background(
                 cue == nil ? colour : colour.opacity(held ? 1 : 0.82), in: .rect(cornerRadius: 4)
             )
@@ -113,6 +116,8 @@ struct MemoryCueButtons: View {
 
 struct LoopControls: View {
     let deck: DeckModel
+    /// Narrow rows leave out the halve and double buttons (the keys still work).
+    var condensed = false
 
     var body: some View {
         let active = deck.loop?.active == true
@@ -128,9 +133,11 @@ struct LoopControls: View {
                 .buttonStyle(ControlButtonStyle(width: 50, lit: active))
                 .disabled(deck.loop == nil)
                 .help("Exit or re-enter the loop (R)")
-            Button { deck.halveLoop() } label: { Image(systemName: "chevron.left") }
-                .buttonStyle(ControlButtonStyle(width: 22))
-                .help("Halve the loop length (/)")
+            if !condensed {
+                Button { deck.halveLoop() } label: { Image(systemName: "chevron.left") }
+                    .buttonStyle(ControlButtonStyle(width: 22))
+                    .help("Halve the loop length (/)")
+            }
             Menu {
                 ForEach(LoopLength.sizes, id: \.self) { size in
                     Button("\(LoopLength.label(size)) beat\(size == 1 ? "" : "s")") { deck.beatLoop(size) }
@@ -145,9 +152,11 @@ struct LoopControls: View {
             .menuIndicator(.hidden)
             .background(PlayerStyle.button, in: .rect(cornerRadius: 3))
             .help("Auto-loop length in beats (4 to 9 start 1 to 32 beat loops)")
-            Button { deck.doubleLoop() } label: { Image(systemName: "chevron.right") }
-                .buttonStyle(ControlButtonStyle(width: 22))
-                .help("Double the loop length (Option-\\)")
+            if !condensed {
+                Button { deck.doubleLoop() } label: { Image(systemName: "chevron.right") }
+                    .buttonStyle(ControlButtonStyle(width: 22))
+                    .help("Double the loop length (Option-\\)")
+            }
             Button("LOOP") { deck.autoLoop() }
                 .buttonStyle(ControlButtonStyle(width: 44, lit: active))
                 .help("Loop the chosen length from the playhead, or exit the active loop")
@@ -162,6 +171,8 @@ struct LoopControls: View {
 
 struct JumpControls: View {
     let deck: DeckModel
+    /// False hides the size menu, leaving the two arrows (the size stays as chosen).
+    var showsSize = true
 
     var body: some View {
         @Bindable var deck = deck
@@ -169,18 +180,20 @@ struct JumpControls: View {
             Button { deck.jump(direction: -1) } label: { Image(systemName: "backward.end.fill") }
                 .buttonStyle(ControlButtonStyle(width: 28))
                 .help("Jump back (Left Arrow)")
-            Menu {
-                ForEach(JumpSize.all) { size in
-                    Button(size.label) { deck.jumpSize = size }
+            if showsSize {
+                Menu {
+                    ForEach(JumpSize.all) { size in
+                        Button(size.label) { deck.jumpSize = size }
+                    }
+                } label: {
+                    Text(deck.jumpSize.label).font(.system(size: 10, weight: .bold)).frame(width: 56, height: 24)
                 }
-            } label: {
-                Text(deck.jumpSize.label).font(.system(size: 10, weight: .bold)).frame(width: 56, height: 24)
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .background(PlayerStyle.button, in: .rect(cornerRadius: 3))
+                .help("Beat jump size")
             }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .background(PlayerStyle.button, in: .rect(cornerRadius: 3))
-            .help("Beat jump size")
             Button { deck.jump(direction: 1) } label: { Image(systemName: "forward.end.fill") }
                 .buttonStyle(ControlButtonStyle(width: 28))
                 .help("Jump forward (Right Arrow)")

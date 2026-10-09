@@ -27,12 +27,14 @@ struct DeckPanel: View {
     /// Narrower than this and the panel scrolls sideways: its controls never ask the window for
     /// more room (a content minimum wider than the detail column set the split view's size
     /// constraints chasing each other).
-    static let contentWidth = 800.0
+    static let contentWidth = 640.0
+    /// Narrower than this the sleeve and meter column goes and a small sleeve joins the title.
+    static let narrowWidth = 900.0
 
     var body: some View {
         GeometryReader { geometry in
             ScrollView(.horizontal, showsIndicators: false) {
-                content
+                content(narrow: geometry.size.width < Self.narrowWidth)
                     .frame(width: max(geometry.size.width, Self.contentWidth), height: geometry.size.height)
             }
             .scrollBounceBehavior(.basedOnSize)
@@ -42,24 +44,26 @@ struct DeckPanel: View {
         .overlay(alignment: .bottomLeading) { NoticeBanner(player: player) }
     }
 
-    private var content: some View {
-        HStack(alignment: .top, spacing: 14) {
-            VStack(spacing: 8) {
-                Sleeve(deck: deck)
-                VUMeters(player: player, deck: deck)
-                    .frame(maxHeight: .infinity)
+    private func content(narrow: Bool) -> some View {
+        HStack(alignment: .top, spacing: narrow ? 10 : 14) {
+            if !narrow {
+                VStack(spacing: 8) {
+                    Sleeve(deck: deck)
+                    VUMeters(player: player, deck: deck)
+                        .frame(maxHeight: .infinity)
+                }
             }
             VStack(alignment: .leading, spacing: 6) {
-                header
+                header(narrow: narrow)
                 PhraseStrip(deck: deck)
-                    .frame(height: 14)
+                    .frame(height: narrow ? 10 : 14)
                 OverviewWaveform(deck: deck, palette: palette)
-                    .frame(height: 46)
+                    .frame(height: narrow ? 40 : 46)
                 HStack(spacing: 6) {
                     ZoomColumn(deck: deck)
                     DetailWaveform(deck: deck, palette: palette)
                         .clipShape(.rect(cornerRadius: 2))
-                        .frame(minHeight: 110, maxHeight: .infinity)
+                        .frame(minHeight: 52, maxHeight: .infinity)
                         .accessibilityLabel("Waveform")
                 }
                 controls
@@ -71,8 +75,9 @@ struct DeckPanel: View {
 
     // MARK: Header: track info, key, BPM
 
-    private var header: some View {
-        HStack(alignment: .top, spacing: 14) {
+    private func header(narrow: Bool) -> some View {
+        HStack(alignment: .top, spacing: narrow ? 10 : 14) {
+            if narrow { Sleeve(deck: deck, edge: 40) }
             VStack(alignment: .leading, spacing: 2) {
                 Text(titleText)
                     .font(.system(size: 17, weight: .semibold))
@@ -140,7 +145,7 @@ struct DeckPanel: View {
                 HStack(spacing: 10) {
                     CueButton(deck: deck)
                     PlayButton(deck: deck, toggle: { player.togglePlay(deck.deck) })
-                    PadRow(deck: deck)
+                    PadRow(deck: deck, compact: true)
                     Spacer(minLength: 8)
                     TimeReadout(deck: deck)
                 }
@@ -325,7 +330,7 @@ struct TempoColumn: View {
     let deck: DeckModel
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 5) {
             Button(deck.tempoRange.label) { deck.cycleTempoRange() }
                 .buttonStyle(PlayerChipStyle(on: false))
                 .help("Tempo range")
@@ -335,7 +340,7 @@ struct TempoColumn: View {
                 .help("Master Tempo holds the key while the tempo changes")
             TempoFader(deck: deck)
                 .frame(width: 44)
-                .frame(minHeight: 70)
+                .frame(minHeight: 56)
             Text(PlayerFormat.tempoPercent(deck.tempo))
                 .font(.system(size: 11, weight: .medium).monospacedDigit())
                 .foregroundStyle(PlayerStyle.text)

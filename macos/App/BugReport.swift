@@ -80,7 +80,7 @@ final class BugReportModel {
         NSPasteboard.general.setString(text, forType: .string)
     }
     /// Shows a file selected in the Finder; replaced in tests.
-    @ObservationIgnored var revealFile: (URL) -> Void = { NSWorkspace.shared.activateFileViewerSelecting([$0]) }
+    @ObservationIgnored var revealFile: (URL) -> Void = { revealInFileViewer([$0]) }
 
     private(set) var report: DiagnosticsReport?
     private(set) var isLoading = false
