@@ -16,6 +16,7 @@ use std::time::Duration;
 use rbl_link::{Interface, LinkExport, Ports, Snapshot, Source};
 use serde::Serialize;
 
+use crate::events::{AppEvent, EventSink};
 use crate::state::AppState;
 
 /// How often the players are looked at for a change worth reporting.
@@ -160,7 +161,7 @@ pub fn interfaces() -> Vec<InterfaceDto> {
 /// a session that owns the state.
 struct StateSource(
     Weak<AppState>,
-    Arc<dyn Fn(&'static str, u32) + Send + Sync>,
+    Arc<dyn EventSink>,
     rbl_link::KeyNotation,
     rbl_link::KeyOrder,
 );
@@ -208,12 +209,14 @@ impl Source for StateSource {
             // through the methods below.
             rbl_link::Edit::HistoryAdd { .. } | rbl_link::Edit::HistoryRemove { .. } | rbl_link::Edit::HistoryDelete { .. } => return false,
         };
-        let event = touched.event();
-        let result = state.write_then(|writer| match edit {
-            rbl_link::Edit::Tag { track, add: true } => writer.tag_list_add(&[track.to_string()]),
-            rbl_link::Edit::Tag { track, add: false } => writer.tag_list_remove(&[track.to_string()]),
-            rbl_link::Edit::ClearTags => writer.tag_list_clear(),
-            rbl_link::Edit::Rating { track, stars } => writer.set_rating(&track.to_string(), *stars),
+        // A player's edit is a library write like any other: through the
+        // write gate (Library Protection, rekordbox running) and the same
+        // commit pipeline, so the window hears of it.
+        let result = crate::edits::commit(&state, &*self.1, touched, |writer| match edit {
+            rbl_link::Edit::Tag { track, add: true } => writer.tag_list_add(&[track.to_string()]).map(drop),
+            rbl_link::Edit::Tag { track, add: false } => writer.tag_list_remove(&[track.to_string()]).map(drop),
+            rbl_link::Edit::ClearTags => writer.tag_list_clear().map(drop),
+            rbl_link::Edit::Rating { track, stars } => writer.set_rating(&track.to_string(), *stars).map(drop),
             rbl_link::Edit::HotCueBankCue { bank, cue } => writer.set_hot_cue_bank_cue(&bank.to_string(), &rbl_db::details::HotCueBankCue {
                 slot: cue.slot,
                 content: cue.content,
@@ -224,15 +227,15 @@ impl Source for StateSource {
                 active_loop: cue.active_loop,
                 beat_loop_size: cue.beat_loop_size,
                 cue_microsec: cue.cue_microsec,
-            }),
+            }).map(drop),
             rbl_link::Edit::GridOffset { .. }
             | rbl_link::Edit::HistoryAdd { .. }
             | rbl_link::Edit::HistoryRemove { .. }
             | rbl_link::Edit::HistoryDelete { .. } => unreachable!("handled above"),
-        }, |db, _| crate::edits::refresh_after_edit(&state, db, touched));
+        });
         match result {
-            Ok(generation) => { (self.1)(event, generation); true }
-            Err(error) => { tracing::warn!(%error, ?edit, "player library edit or refresh failed"); false }
+            Ok(_) => true,
+            Err(error) => { tracing::warn!(%error, ?edit, "player library edit refused or failed"); false }
         }
     }
 
@@ -310,17 +313,10 @@ impl StateSource {
     fn history_write<T>(&self, tracks: Vec<String>, edit: impl FnOnce(&mut rbl_db::write::Writer) -> Result<T, rbl_db::DbError>) -> Option<T> {
         let state = self.0.upgrade()?;
         let touched = crate::edits::Touched::Histories(tracks);
-        let event = touched.event();
-        let result = state.write_then(edit, |db, value| {
-            crate::edits::refresh_after_edit(&state, db, touched).map(|generation| (value, generation))
-        });
-        match result {
-            Ok((value, generation)) => {
-                (self.1)(event, generation);
-                Some(value)
-            }
+        match crate::edits::commit_value(&state, &*self.1, touched, edit) {
+            Ok((_, value)) => Some(value),
             Err(error) => {
-                tracing::warn!(%error, "player history edit or refresh failed");
+                tracing::warn!(%error, "player history edit refused or failed");
                 None
             }
         }
@@ -331,6 +327,7 @@ impl StateSource {
 /// records remain the common baseline used by every player on the network.
 fn save_grid_offset(state: &AppState, track: &str, offset_ms: i16) -> crate::error::AppResult<()> {
     use crate::error::{AppError, ErrorKind};
+    crate::edits::check_gate(state)?;
     let _edit_guard = state.edit_gate.lock();
     let _files = state.analysis_write.lock();
     let location = state.location()?;
@@ -369,17 +366,32 @@ impl Session {
     /// `report` as they change.
     ///
     /// Blocking: binds seven sockets and walks every track's path.
-    pub fn start<F>(
+    pub fn start(
         state: &Arc<AppState>,
         interface: Option<&str>,
         key_notation: rbl_link::KeyNotation,
         key_order: rbl_link::KeyOrder,
-        report: F,
-        library_changed: Arc<dyn Fn(&'static str, u32) + Send + Sync>,
-    ) -> Result<Self, String>
-    where
-        F: Fn(LinkStatusDto) + Send + 'static,
-    {
+        sink: Arc<dyn EventSink>,
+    ) -> Result<Self, String> {
+        Self::start_on(state, interface, None, key_notation, key_order, sink)
+    }
+
+    /// [`Session::start`], optionally on a given interface and ports instead
+    /// of choosing among the machine's own and binding rekordbox's. Tests use
+    /// this to run on loopback with ephemeral ports; the app never passes one.
+    pub fn start_on(
+        state: &Arc<AppState>,
+        interface: Option<&str>,
+        forced: Option<(Interface, Ports)>,
+        key_notation: rbl_link::KeyNotation,
+        key_order: rbl_link::KeyOrder,
+        sink: Arc<dyn EventSink>,
+    ) -> Result<Self, String> {
+        let report = {
+            let sink = Arc::clone(&sink);
+            move |status: LinkStatusDto| sink.emit(AppEvent::LinkStatus(status))
+        };
+        let library_changed = sink;
         let mut available = rbl_link::interfaces();
         available.sort_by_key(|candidate| interface_preference(
             crate::network_labels::for_interface(&candidate.name).connection.as_deref(),
@@ -388,14 +400,24 @@ impl Session {
             interfaces = ?available.iter().map(|i| format!("{} {}/{}", i.name, i.address, i.netmask)).collect::<Vec<_>>(),
             "interfaces LINK could run on"
         );
-        let rx3 = match crate::rx3_link::detect() {
-            Ok(rx3) => rx3,
-            Err(error) => {
-                tracing::debug!(%error, "XDJ-RX3 MIDI detection unavailable");
-                None
+        let rx3 = if forced.is_some() {
+            None
+        } else {
+            match crate::rx3_link::detect() {
+                Ok(rx3) => rx3,
+                Err(error) => {
+                    tracing::debug!(%error, "XDJ-RX3 MIDI detection unavailable");
+                    None
+                }
             }
         };
-        let chosen = if let Some(name) = interface {
+        let (forced_interface, ports) = match forced {
+            Some((interface, ports)) => (Some(interface), ports),
+            None => (None, Ports::REKORDBOX),
+        };
+        let chosen = if forced_interface.is_some() {
+            forced_interface
+        } else if let Some(name) = interface {
             available.iter().find(|i| i.name == name).cloned()
         } else {
             let peers = state.link_peers();
@@ -434,7 +456,7 @@ impl Session {
             key_notation,
             key_order,
         ));
-        let export = LinkExport::start(source, chosen, Ports::REKORDBOX).map_err(|e| e.to_string())?;
+        let export = LinkExport::start(source, chosen, ports).map_err(|e| e.to_string())?;
         let rx3_activation = match rx3 {
             Some(rx3) => match rx3.activate() {
                 Ok(activation) => Some(activation),
@@ -716,7 +738,15 @@ pub fn start_watcher<F>(report: F) -> Option<rbl_link::Watcher>
 where
     F: Fn(Vec<PeerDto>) + Send + 'static,
 {
-    match rbl_link::Watcher::start(rbl_link::Ports::REKORDBOX.announce, move |players| {
+    start_watcher_on(rbl_link::Ports::REKORDBOX.announce, report)
+}
+
+/// [`start_watcher`] on a given port.
+pub fn start_watcher_on<F>(port: u16, report: F) -> Option<rbl_link::Watcher>
+where
+    F: Fn(Vec<PeerDto>) + Send + 'static,
+{
+    match rbl_link::Watcher::start(port, move |players| {
         report(players.iter().map(PeerDto::from_player).collect());
     }) {
         Ok(watcher) => {
@@ -730,6 +760,13 @@ where
     }
 }
 
+/// Starts the passive watcher and keeps it in `state`, reporting peers as
+/// `LinkPeers` events. Listens only; transmits nothing. Blocking (binds).
+pub fn start_peer_watcher(state: &AppState, sink: Arc<dyn EventSink>) {
+    let watcher = start_watcher(move |peers| sink.emit(AppEvent::LinkPeers(peers)));
+    drop(state.set_watcher(watcher));
+}
+
 /// The peers heard so far, as the window shows them.
 pub fn peers(state: &AppState) -> Vec<PeerDto> {
     state.link_peers().iter().map(PeerDto::from_player).collect()
@@ -737,16 +774,108 @@ pub fn peers(state: &AppState) -> Vec<PeerDto> {
 
 /// Why LINK cannot start now, if it cannot: rekordbox holds the ports.
 pub fn refusal() -> Option<String> {
-    if rbl_db::is_rekordbox_running() {
+    refusal_with(rbl_db::is_rekordbox_running)
+}
+
+fn refusal_with(running: impl FnOnce() -> bool) -> Option<String> {
+    if running() {
         return Some("rekordbox is running and holds the link ports. Quit it to turn LINK on.".to_owned());
     }
     None
+}
+
+/// [`refusal`], asking the state's own "is rekordbox running" check so a
+/// test can simulate it.
+pub fn refusal_for(state: &AppState) -> Option<String> {
+    refusal_with(|| (*state.running_probe.lock())())
+}
+
+/// LINK as it stands: the running session, or off with why it cannot start.
+pub fn status(state: &AppState) -> LinkStatusDto {
+    state.link_status().unwrap_or_else(|| LinkStatusDto::off(refusal_for(state)))
+}
+
+/// How a start picks keys: notation and sort order for browsing on a player.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct KeyOptions {
+    pub alphanumeric: bool,
+    pub alphabetical: bool,
+}
+
+/// Turns LINK on, or says why it did not: a refusal (rekordbox running) or a
+/// bind failure comes back as an off status carrying the problem. Starting
+/// while on returns the running status. Emits `LinkStatus` once it is on.
+///
+/// Blocking: binds seven sockets and walks every track's path. Call it off
+/// the main/UI thread.
+pub fn start_export(state: &Arc<AppState>, sink: &Arc<dyn EventSink>, interface: Option<&str>, keys: KeyOptions) -> LinkStatusDto {
+    start_export_on(state, sink, interface, None, keys)
+}
+
+/// [`start_export`], optionally on a given interface and ports; tests only.
+pub fn start_export_on(
+    state: &Arc<AppState>,
+    sink: &Arc<dyn EventSink>,
+    interface: Option<&str>,
+    forced: Option<(Interface, Ports)>,
+    keys: KeyOptions,
+) -> LinkStatusDto {
+    if let Some(running) = state.link_status() {
+        tracing::debug!("LINK asked to start while running; the running session stands");
+        return running;
+    }
+    if let Some(problem) = refusal_for(state) {
+        tracing::warn!(%problem, "LINK refused");
+        return LinkStatusDto::off(Some(problem));
+    }
+    tracing::info!(interface = interface.unwrap_or("auto"), "LINK starting");
+    let notation = if keys.alphanumeric { rbl_link::KeyNotation::Alphanumeric } else { rbl_link::KeyNotation::Classic };
+    let order = if keys.alphabetical { rbl_link::KeyOrder::Alphabetical } else { rbl_link::KeyOrder::Musical };
+    match Session::start_on(state, interface, forced, notation, order, Arc::clone(sink)) {
+        Ok(session) => {
+            let status = session.status(state.library().ok().as_deref());
+            // A session started twice at once: the second is dropped, which
+            // unbinds it.
+            drop(state.set_link(Some(session)));
+            sink.emit(AppEvent::LinkStatus(status.clone()));
+            status
+        }
+        Err(problem) => {
+            tracing::warn!(%problem, "LINK could not start");
+            LinkStatusDto::off(Some(problem))
+        }
+    }
+}
+
+/// Turns LINK off: the players lose the source. Blocking (stopping joins the
+/// servers' threads). Emits `LinkStatus` (off).
+pub fn stop_export(state: &AppState, sink: &dyn EventSink) -> LinkStatusDto {
+    let session = state.set_link(None);
+    if session.is_some() {
+        tracing::info!("LINK stopping");
+    } else {
+        tracing::debug!("LINK asked to stop while off");
+    }
+    drop(session);
+    let status = LinkStatusDto::off(None);
+    sink.emit(AppEvent::LinkStatus(status.clone()));
+    status
 }
 
 #[cfg(test)]
 mod grid_offset_tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+    use crate::test_support::Recorder;
+
+    /// The library/tag-list change events a recorder heard, with generations.
+    fn changed(recorder: &Recorder) -> Vec<(&'static str, u32)> {
+        recorder.0.lock().unwrap().iter().filter_map(|event| match event {
+            AppEvent::LibraryChanged(g) => Some(("library:changed", *g)),
+            AppEvent::TagListChanged(g) => Some(("tag-list:changed", *g)),
+            _ => None,
+        }).collect()
+    }
 
     #[test]
     fn player_tag_edits_persist_and_refresh_without_replacing_the_track_index() {
@@ -758,13 +887,10 @@ mod grid_offset_tests {
         state.set_library(library, false, db.schema().db_version, 0, location);
         crate::backups::create(&state).unwrap();
         let original = state.library().unwrap();
-        let notifications = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let received = notifications.clone();
+        let notifications = Arc::new(crate::test_support::Recorder::default());
         let source = StateSource(
             Arc::downgrade(&state),
-            Arc::new(move |event, generation| {
-                received.lock().unwrap().push((event, generation));
-            }),
+            notifications.clone(),
             rbl_link::KeyNotation::Classic,
             rbl_link::KeyOrder::Musical,
         );
@@ -792,9 +918,9 @@ mod grid_offset_tests {
             assert_eq!(state.summary().3, generation);
             assert!(state.view(collection).is_ok());
             assert!(state.view(tag_list).is_err());
-            assert_eq!(notifications.lock().unwrap().last(), Some(&("tag-list:changed", generation)));
+            assert_eq!(changed(&notifications).last(), Some(&("tag-list:changed", generation)));
         }
-        assert_eq!(notifications.lock().unwrap().len(), 5);
+        assert_eq!(changed(&notifications).len(), 5);
         let old_rating = original.rating[row as usize];
         let stars = (old_rating + 1) % 6;
         assert!(source.edit(&rbl_link::Edit::Rating { track, stars }));
@@ -805,8 +931,8 @@ mod grid_offset_tests {
         let db = state.open_read_only().unwrap();
         let (persisted, _) = rbl_index::load(&db).unwrap();
         assert_eq!(persisted.rating, updated.rating);
-        assert_eq!(notifications.lock().unwrap().len(), 6);
-        assert_eq!(notifications.lock().unwrap().last(), Some(&("library:changed", state.summary().3)));
+        assert_eq!(changed(&notifications).len(), 6);
+        assert_eq!(changed(&notifications).last(), Some(&("library:changed", state.summary().3)));
     }
 
     #[test]
@@ -819,13 +945,10 @@ mod grid_offset_tests {
         let state = Arc::new(AppState::with_backups(dir.path().join("backups")));
         state.set_library(library, false, db.schema().db_version, 0, location);
         crate::backups::create(&state).unwrap();
-        let notifications = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let received = notifications.clone();
+        let notifications = Arc::new(crate::test_support::Recorder::default());
         let source = StateSource(
             Arc::downgrade(&state),
-            Arc::new(move |event, generation| {
-                received.lock().unwrap().push((event, generation));
-            }),
+            notifications.clone(),
             rbl_link::KeyNotation::Classic,
             rbl_link::KeyOrder::Musical,
         );
@@ -845,7 +968,7 @@ mod grid_offset_tests {
         let tracks = catalog.list(&Query::Tracks { scope: TrackScope::History(*session), sort: Sort::Default });
         assert_eq!(tracks, vec![Row::Track { id: track, position: 1 }]);
         assert_eq!(state.library().unwrap().play_count[row], before + 1);
-        assert_eq!(notifications.lock().unwrap().last(), Some(&("library:changed", state.summary().3)));
+        assert_eq!(changed(&notifications).last(), Some(&("library:changed", state.summary().3)));
 
         // Persisted: a fresh read of the database has the session and the play.
         let reopened = state.open_read_only().unwrap();
@@ -877,7 +1000,7 @@ mod grid_offset_tests {
         state.set_library(library, false, db.schema().db_version, 0, location);
         let source = StateSource(
             Arc::downgrade(&state),
-            Arc::new(|_, _| {}),
+            Arc::new(crate::events::NullSink),
             rbl_link::KeyNotation::Classic,
             rbl_link::KeyOrder::Musical,
         );
@@ -912,5 +1035,83 @@ mod grid_offset_tests {
         }
         assert_eq!(std::fs::read(&dat).unwrap(), original);
         assert!(save_grid_offset(&state, "999999", 234).is_err());
+    }
+
+    fn source_of(state: &Arc<AppState>, recorder: &Arc<Recorder>) -> StateSource {
+        StateSource(Arc::downgrade(state), recorder.clone(), rbl_link::KeyNotation::Classic, rbl_link::KeyOrder::Musical)
+    }
+
+    #[test]
+    fn player_edits_are_refused_by_the_write_gate() {
+        let (_dir, state, _) = crate::test_support::fixture(true);
+        let recorder = Arc::new(Recorder::default());
+        let source = source_of(&state, &recorder);
+        let track: u32 = rbl_db::fixture::track_id(1).parse().unwrap();
+        let row = state.library().unwrap().row_of(&track.to_string()).unwrap() as usize;
+        let before = state.library().unwrap().rating[row];
+        let generation = state.summary().3;
+        // Library Protection is on: every kind of player edit is refused and nothing is heard.
+        assert!(!source.edit(&rbl_link::Edit::Rating { track, stars: (before + 1) % 6 }));
+        assert!(!source.edit(&rbl_link::Edit::Tag { track, add: true }));
+        assert!(!source.edit(&rbl_link::Edit::ClearTags));
+        assert!(!source.edit(&rbl_link::Edit::GridOffset { track, offset_ms: 5 }));
+        assert!(!source.add_to_history(1, track));
+        assert!(source.new_link_history().is_none());
+        assert_eq!(state.library().unwrap().rating[row], before);
+        assert_eq!(state.summary().3, generation);
+        assert!(recorder.0.lock().unwrap().is_empty());
+
+        // Gate open: the same edit goes through and announces itself.
+        state.set_protect_library(false);
+        assert!(source.edit(&rbl_link::Edit::Rating { track, stars: (before + 1) % 6 }));
+        assert_eq!(state.library().unwrap().rating[row], (before + 1) % 6);
+        assert_eq!(recorder.names(), ["library:changed", "edit-history:changed"]);
+    }
+
+    #[test]
+    fn start_refuses_while_rekordbox_runs_and_binds_nothing() {
+        let (_dir, state, _) = crate::test_support::fixture(false);
+        state.set_running_probe(|| true);
+        let recorder = Arc::new(Recorder::default());
+        let sink: Arc<dyn EventSink> = recorder.clone();
+        let forced = Some((Interface::loopback(), Ports::EPHEMERAL));
+        let status = start_export_on(&state, &sink, None, forced, KeyOptions::default());
+        assert!(!status.on);
+        assert!(status.problem.as_deref().is_some_and(|p| p.starts_with("rekordbox is running")));
+        assert!(!state.link_running());
+        assert_eq!(self::status(&state).problem, status.problem);
+        assert!(recorder.0.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn link_status_events_come_with_start_and_stop_on_loopback() {
+        let (_dir, state, _) = crate::test_support::fixture(false);
+        state.set_running_probe(|| false);
+        let recorder = Arc::new(Recorder::default());
+        let sink: Arc<dyn EventSink> = recorder.clone();
+        let forced = Some((Interface::loopback(), Ports::EPHEMERAL));
+        let on = start_export_on(&state, &sink, None, forced.clone(), KeyOptions { alphanumeric: true, alphabetical: false });
+        assert!(on.on, "{:?}", on.problem);
+        assert!(matches!(on.state.as_str(), "waiting" | "joining" | "up"));
+        assert_eq!(on.interface.as_ref().map(|i| i.address.as_str()), Some("127.0.0.1"));
+        assert!(state.link_running());
+        // Already on: the running session stands, nothing new is bound.
+        let again = start_export_on(&state, &sink, None, forced, KeyOptions::default());
+        assert!(again.on);
+        // Controls on the running session.
+        state.link_set_master(true);
+        state.link_nudge_master(1.0);
+        assert!(!state.link_take_master_tempo(), "no player is master");
+        assert!(state.link_load_track(1, 1).is_err(), "no such player");
+        let off = stop_export(&state, &*sink);
+        assert!(!off.on);
+        assert_eq!(off.state, "off");
+        assert!(!state.link_running());
+        let heard: Vec<bool> = recorder.0.lock().unwrap().iter().filter_map(|e| match e {
+            AppEvent::LinkStatus(status) => Some(status.on),
+            _ => None,
+        }).collect();
+        assert_eq!(heard, [true, false]);
+        assert!(state.link_load_track(1, 1).is_err(), "LINK is off");
     }
 }

@@ -6,7 +6,7 @@ use rbl_db::fixture::playlist_id;
 use rbl_ffi::{
     Core, EventListener, ExtraColumn, FfiError, LibraryEvent, LoadOutcome, NodeKind, SearchField, SortKey,
     AnalysisSettings, BpmFilter, CueSlot, ExportOptions, ExportState, GridEdit, KeyDisplay, StickOverview, PlaylistFileFormat, StickDefaults,
-    SyncState, TrackFilter, TrackSource, ViewSpec, WaveformColor, WaveformPosition, MAX_ROWS,
+    LinkState, SyncState, TrackFilter, TrackSource, ViewSpec, WaveformColor, WaveformPosition, MAX_ROWS,
 };
 
 #[derive(Default)]
@@ -640,6 +640,28 @@ fn devices_export_sync_and_settings_work_over_the_bridge_on_fake_sticks() {
     core.start_device_watcher();
     core.start_device_watcher();
     std::env::remove_var("RB_LITE_FAKE_VOLUMES");
+}
+
+/// LINK is only ever read and stopped here: starting it binds the real ports, which only
+/// the user's LINK button does. The running paths are covered on loopback in rbl-app.
+#[test]
+fn link_status_and_controls_answer_while_off_and_stopping_raises_status() {
+    let (_dir, core, events) = core();
+    let status = core.link_status();
+    assert!(!status.on);
+    assert_eq!(status.state, LinkState::Off);
+    assert!(status.players.is_empty());
+    assert!((status.master_bpm - 120.0).abs() < f64::EPSILON);
+    assert!(core.link_peers().is_empty());
+    assert!(!core.link_set_master(true).on);
+    assert!(!core.link_nudge_master(1.0).on);
+    assert!(!core.link_take_master_tempo().on);
+    assert!(matches!(core.link_load_track(1, "1".into()), Err(FfiError::Internal { .. })));
+    assert!(matches!(core.link_load_track(1, "nope".into()), Err(FfiError::Internal { .. })));
+    let off = core.stop_link_export();
+    assert!(!off.on);
+    let heard = events.0.lock().unwrap();
+    assert!(heard.iter().any(|e| matches!(e, LibraryEvent::LinkStatus { status } if !status.on)));
 }
 
 #[test]

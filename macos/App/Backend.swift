@@ -151,6 +151,23 @@ protocol BackendProtocol: Sendable {
     func itunesPlaylistTracks(path: String, nodeID: String) async throws -> [ItunesTrack]
     /// Imports the playlists (`itunes:<index>`), the folders above them and their tracks. Behind the write gate.
     func importItunesSelected(path: String, ids: [String]) async throws -> XmlImportReport
+
+    // MARK: Phase 5c: Pro DJ Link. Starting LINK binds the real ports, so only the user's LINK button does.
+
+    /// LINK as it stands; off carries why it cannot start (rekordbox running).
+    func linkStatus() async -> LinkStatus
+    /// Players and mixers heard on the network, whether or not LINK is on.
+    func linkPeers() async -> [LinkPeer]
+    /// Starts the passive listener on UDP 50000 (transmits nothing); peers arrive as `.linkPeers`. Safe to call twice.
+    func startPeerWatcher() async
+    /// Turns LINK on; blocking in the core, so it leaves the actor. A refusal or bind failure answers off with `problem`.
+    func startLinkExport(interface: String?, alphanumericKeys: Bool, alphabeticalKeys: Bool) async -> LinkStatus
+    func stopLinkExport() async -> LinkStatus
+    /// Tells a player to load a library track; throws the reason it could not.
+    func linkLoadTrack(playerNumber: UInt8, trackID: String) async throws
+    func linkSetMaster(on: Bool) async -> LinkStatus
+    func linkNudgeMaster(deltaBpm: Double) async -> LinkStatus
+    func linkTakeMasterTempo() async -> LinkStatus
 }
 
 /// Forwards the Rust core's callbacks into an `AsyncStream`.
@@ -418,6 +435,31 @@ actor Backend: BackendProtocol {
         let core = core
         return try await Task.detached { try core.importItunesSelected(path: path, ids: ids) }.value
     }
+
+    func linkStatus() async -> LinkStatus { core.linkStatus() }
+    func linkPeers() async -> [LinkPeer] { core.linkPeers() }
+    func startPeerWatcher() async {
+        let core = core
+        await Task.detached { core.startPeerWatcher() }.value
+    }
+    // Binding seven sockets and walking every track's path: off the actor, so reads are not queued behind it.
+    func startLinkExport(interface: String?, alphanumericKeys: Bool, alphabeticalKeys: Bool) async -> LinkStatus {
+        let core = core
+        return await Task.detached {
+            core.startLinkExport(interface: interface, alphanumericKeys: alphanumericKeys, alphabeticalKeys: alphabeticalKeys)
+        }.value
+    }
+    func stopLinkExport() async -> LinkStatus {
+        let core = core
+        return await Task.detached { core.stopLinkExport() }.value
+    }
+    func linkLoadTrack(playerNumber: UInt8, trackID: String) async throws {
+        let core = core
+        try await Task.detached { try core.linkLoadTrack(playerNumber: playerNumber, trackId: trackID) }.value
+    }
+    func linkSetMaster(on: Bool) async -> LinkStatus { core.linkSetMaster(on: on) }
+    func linkNudgeMaster(deltaBpm: Double) async -> LinkStatus { core.linkNudgeMaster(deltaBpm: deltaBpm) }
+    func linkTakeMasterTempo() async -> LinkStatus { core.linkTakeMasterTempo() }
 }
 
 func describe(_ error: Error) -> String {

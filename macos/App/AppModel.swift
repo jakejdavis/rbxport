@@ -141,6 +141,10 @@ final class AppModel {
     let exportJobs: ExportJobsModel
     let devices: DevicesModel
     let exportPrefs: DeviceExportPrefs
+    /// Pro DJ Link: the strip's and the Settings pane's model.
+    let link: LinkModel
+    /// Whether the passive listener on UDP 50000 starts at launch (never under test, or with `RBXPORT_NO_LINK_WATCHER=1`).
+    @ObservationIgnored var startsLinkWatcher = LinkWatcherPolicy.isEnabled()
     /// The Sync Manager window's model.
     private(set) var syncManager: SyncManagerModel!
     /// The selected device's settings, while a device is selected.
@@ -226,7 +230,10 @@ final class AppModel {
         exportJobs = ExportJobsModel()
         devices = DevicesModel(jobs: exportJobs)
         exportPrefs = DeviceExportPrefs(defaults: defaults)
+        link = LinkModel(backend: backend, defaults: defaults)
         info.setActive(infoPanelOpen)
+        link.alphanumericKeys = { [weak self] in self?.exportPrefs.stickDefaults.keyDisplay == .alphanumeric }
+        link.notify = { [weak self] in self?.notice = $0 }
         itunes = ItunesModel(
             backend: backend, defaults: defaults, dialogs: { [weak self] in self?.dialogs ?? .live },
             notify: { [weak self] in self?.notice = $0 },
@@ -297,6 +304,11 @@ final class AppModel {
             // Volumes arriving and leaving raise `.devicesChanged`; jobs already running are adopted.
             await backend.startDeviceWatcher()
             exportJobs.seed(await backend.exportProgress())
+            // LINK: listen for players (transmits nothing) and read the status for the strip. Both are
+            // reads; only the LINK button binds the ports to serve the library.
+            if startsLinkWatcher { await backend.startPeerWatcher() }
+            await link.refresh()
+            if startsLinkWatcher { link.refreshOnActivation() }
         }
         startReadOnlyPolling()
     }
@@ -338,6 +350,10 @@ final class AppModel {
             exportJobs.handle(progress: progress)
         case .syncProgress(let progress):
             exportJobs.handle(sync: progress)
+        case .linkStatus(let status):
+            link.handle(status: status)
+        case .linkPeers(let peers):
+            link.handle(peers: peers)
         case .exportDone:
             // The report comes back to whoever asked; the stick now holds an export.
             await refreshDevices()
