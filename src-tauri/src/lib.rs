@@ -297,15 +297,9 @@ pub fn run() {
             // player and mixer and reports them, so the shell can offer LINK
             // the moment one appears. Nothing is transmitted until LINK is on.
             {
-                let handle = app.handle().clone();
+                let sink: Arc<dyn rbl_app::EventSink> = Arc::new(TauriSink(app.handle().clone()));
                 let state = Arc::clone(app.state::<Arc<AppState>>().inner());
-                tauri::async_runtime::spawn_blocking(move || {
-                    let emitter = handle.clone();
-                    let watcher = crate::link::start_watcher(move |peers| {
-                        let _ = tauri::Emitter::emit(&emitter, "link:peers", peers);
-                    });
-                    drop(state.set_watcher(watcher));
-                });
+                tauri::async_runtime::spawn_blocking(move || rbl_app::link::start_peer_watcher(&state, sink));
             }
             // A stick plugged in or pulled out is noticed within a couple of
             // seconds, focused or not; the panel refreshes itself on the event.

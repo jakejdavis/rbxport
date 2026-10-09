@@ -166,6 +166,14 @@ struct RbxportApp: App {
                 await model.runImportDemo(steps, environment: env)
             }
         }
+        // RBXPORT_DEMO_LINK=1 shows a made-up LINK session in the strip and the LINK pane. It is only
+        // data in the model: no socket is opened and no backend call is made.
+        if env["RBXPORT_DEMO_LINK"] == "1" {
+            Task { @MainActor in
+                await model.waitUntilSettled()
+                model.link.showDemo(status: LinkModel.demoStatus, peers: [])
+            }
+        }
         if env["RBXPORT_OPEN_SMART_EDITOR"] == "1" {
             Task { @MainActor in
                 await model.waitUntilSettled()

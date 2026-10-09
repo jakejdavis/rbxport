@@ -17,6 +17,7 @@ mod core;
 mod devices;
 mod error;
 mod events;
+mod link;
 mod playback;
 mod types;
 
@@ -27,6 +28,7 @@ pub use devices::{
     SyncProgress, SyncState, UsbImportReport, VerifyReport, WaveformColor, WaveformPosition,
 };
 pub use error::FfiError;
+pub use link::{LinkConnection, LinkDeviceKind, LinkInterface, LinkLoaded, LinkPeer, LinkPlayer, LinkState, LinkStatus};
 pub use events::{EventListener, LibraryEvent};
 pub use playback::{
     AudioDevice, AudioDevices, ChannelState, Deck, DeckEvent, DeckTick, EqBand, Limiter, MetronomeVolume, Meters, MixerSnapshot,

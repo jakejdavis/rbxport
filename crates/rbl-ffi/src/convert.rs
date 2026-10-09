@@ -410,6 +410,8 @@ impl From<AppEvent> for LibraryEvent {
             AppEvent::ExportProgress(p) => Self::ExportProgress { progress: p.into() },
             AppEvent::ExportDone(report) => Self::ExportDone { report: report.into() },
             AppEvent::SyncProgress(p) => Self::SyncProgress { progress: p.into() },
+            AppEvent::LinkStatus(status) => Self::LinkStatus { status: status.into() },
+            AppEvent::LinkPeers(peers) => Self::LinkPeers { peers: peers.into_iter().map(Into::into).collect() },
         }
     }
 }

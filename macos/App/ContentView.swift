@@ -150,6 +150,7 @@ struct DetailView: View {
                     }
                 }
                 Divider()
+                LinkDeckStrip(model: model.link)
                 StatusLine()
             }
             .frame(minHeight: 120)

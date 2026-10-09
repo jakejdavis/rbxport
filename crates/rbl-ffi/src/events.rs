@@ -5,10 +5,11 @@ use std::sync::Arc;
 use rbl_app::{AppEvent, EventSink};
 
 use crate::devices::{ExportProgress, ExportReport, SyncProgress};
+use crate::link::{LinkPeer, LinkStatus};
 use crate::types::{EditHistory, ImportProgress, LibraryProblem};
 
 /// Something that happened which the UI may want to redraw for.
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
 pub enum LibraryEvent {
     LibraryReady,
     LibraryProblem { problem: LibraryProblem },
@@ -23,6 +24,8 @@ pub enum LibraryEvent {
     ExportProgress { progress: ExportProgress },
     ExportDone { report: ExportReport },
     SyncProgress { progress: SyncProgress },
+    LinkStatus { status: LinkStatus },
+    LinkPeers { peers: Vec<LinkPeer> },
 }
 
 /// Implemented in Swift. Called from whichever thread raised the event, so

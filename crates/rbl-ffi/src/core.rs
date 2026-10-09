@@ -14,6 +14,7 @@ use rbl_db::{Library as Db, LibraryLocation, OpenMode};
 use crate::error::FfiError;
 use crate::devices::{ItunesLibrary, ItunesTrack, UsbImportReport, DeviceSettings, DeviceSyncState, ExportOptions, ExportProgress, ExportReport, MissingExportFile, SyncDeviceReport, VerifyReport};
 use crate::events::{EventListener, ListenerSink};
+use crate::link::{LinkPeer, LinkStatus};
 use crate::playback::{Playback, PlaybackListener};
 use crate::types::{
     AnalysisResult, AnalysisSettings, Beat, Cue, CueSlot, GridEdit, GridState, Phrase, EditHistory, SmartRule, TrackField, ImportReport, XmlImportReport, MissingTracks, Duplicates, RelocateReport, Device, ExplorerChildren, ExplorerRoot, ExtraColumn, FilterValues, LibraryProblem, PlaylistFileFormat, LibrarySummary, LoadOutcome, Row, TrackDetails, TrackLookups, TreeNode, ViewHandle, ViewSpec, WaveformKind,
@@ -651,5 +652,65 @@ impl Core {
     /// Records a play: today's history session and the play count. Returns the generation.
     pub fn record_play(&self, track_id: String) -> Result<u32, FfiError> {
         ffi("record_play", || track_edits::record_play(&self.state, &self.sink, &track_id))
+    }
+
+    // ---- Phase 5c: Pro DJ Link. Starting binds real ports: only the user's LINK button does.
+
+    /// LINK as it stands: on or off, on which interface, who is listening; off carries why
+    /// it cannot start (rekordbox running).
+    pub fn link_status(&self) -> LinkStatus {
+        rbl_app::link::status(&self.state).into()
+    }
+
+    /// The players and mixers heard on the network, whether or not LINK is on.
+    pub fn link_peers(&self) -> Vec<LinkPeer> {
+        rbl_app::link::peers(&self.state).into_iter().map(Into::into).collect()
+    }
+
+    /// Starts the passive watcher on UDP 50000 (listens only, transmits nothing); peers
+    /// arrive as `LinkPeers`. Blocking (binds): call off the main thread. Safe to call again.
+    pub fn start_peer_watcher(&self) {
+        rbl_app::link::start_peer_watcher(&self.state, Arc::new(ListenerSink(Arc::clone(&self.listener))));
+    }
+
+    /// Turns LINK on. Blocking (binds seven sockets, walks every track's path): call it off
+    /// the main actor. A refusal (rekordbox running) or bind failure comes back as an off
+    /// status with `problem`. Raises `LinkStatus`.
+    pub fn start_link_export(&self, interface: Option<String>, alphanumeric_keys: bool, alphabetical_keys: bool) -> LinkStatus {
+        let sink: Arc<dyn EventSink> = Arc::new(ListenerSink(Arc::clone(&self.listener)));
+        let keys = rbl_app::link::KeyOptions { alphanumeric: alphanumeric_keys, alphabetical: alphabetical_keys };
+        rbl_app::link::start_export(&self.state, &sink, interface.as_deref(), keys).into()
+    }
+
+    /// Turns LINK off. Blocking (joins the servers' threads). Raises `LinkStatus`.
+    pub fn stop_link_export(&self) -> LinkStatus {
+        rbl_app::link::stop_export(&self.state, &self.sink).into()
+    }
+
+    /// Tells a player to load a library track. Fails with the reason when LINK is off or the
+    /// player has not mounted the library.
+    pub fn link_load_track(&self, player_number: u8, track_id: String) -> Result<(), FfiError> {
+        ffi("link_load_track", || {
+            let id: u32 = track_id.parse().map_err(|_| AppError::internal(format!("bad track id: {track_id}")))?;
+            self.state.link_load_track(player_number, id).map_err(AppError::internal)
+        })
+    }
+
+    /// Becomes the network's tempo master, or resigns.
+    pub fn link_set_master(&self, on: bool) -> LinkStatus {
+        self.state.link_set_master(on);
+        rbl_app::link::status(&self.state).into()
+    }
+
+    /// Nudges the master tempo by `delta_bpm` (the UI sends +-1).
+    pub fn link_nudge_master(&self, delta_bpm: f64) -> LinkStatus {
+        self.state.link_nudge_master(delta_bpm);
+        rbl_app::link::status(&self.state).into()
+    }
+
+    /// Takes the current master player's tempo; a no-op when no player is master.
+    pub fn link_take_master_tempo(&self) -> LinkStatus {
+        self.state.link_take_master_tempo();
+        rbl_app::link::status(&self.state).into()
     }
 }

@@ -113,6 +113,8 @@ actor MockBackend: BackendProtocol {
     /// What the Phase 5a device, export and sync calls answer, and what they were asked.
     var devices5a = MockDeviceScript()
     var imports5b = MockImportScript()
+    /// What the Phase 5c LINK calls answer, and what they were asked. Nothing here opens a socket.
+    var link5c = MockLinkScript()
     var filterValuesAnswer = FilterValues(
         bpms: [CountedBpm(value: 120, count: 50), CountedBpm(value: 128, count: 5)],
         keys: [CountedKey(value: "Am", count: 3), CountedKey(value: "C", count: 2)], tags: [])
@@ -1221,5 +1223,73 @@ extension MockBackend {
             trackCount += Int(imports5b.itunesReport.imported)
             return imports5b.itunesReport
         }
+    }
+}
+
+// MARK: - Phase 5c
+
+/// What the LINK calls answer, and what they were asked. The mock never opens a socket.
+struct MockLinkScript: Sendable {
+    static let off = LinkStatus(
+        on: false, problem: nil, interface: nil, players: [], interfaces: [], master: false, masterBpm: 120,
+        state: .off, number: nil)
+    var status = MockLinkScript.off
+    var peers: [LinkPeer] = []
+    /// What a start answers; defaults to "up on en5".
+    var startAnswer: LinkStatus?
+    var loadFailure: FfiError?
+    var calls: [String] = []
+    var watcherStarts = 0
+}
+
+extension MockBackend {
+    func scriptLink(_ change: @Sendable (inout MockLinkScript) -> Void) { change(&link5c) }
+    func linkCalls() -> [String] { link5c.calls }
+    func watcherStarts() -> Int { link5c.watcherStarts }
+
+    func linkStatus() async -> LinkStatus { link5c.status }
+    func linkPeers() async -> [LinkPeer] { link5c.peers }
+    func startPeerWatcher() async { link5c.watcherStarts += 1 }
+
+    func startLinkExport(interface: String?, alphanumericKeys: Bool, alphabeticalKeys: Bool) async -> LinkStatus {
+        link5c.calls.append("start(\(interface ?? "auto"),alphanumeric:\(alphanumericKeys),alphabetical:\(alphabeticalKeys))")
+        if link5c.status.problem != nil && !link5c.status.on { return link5c.status }
+        let answer = link5c.startAnswer ?? LinkStatus(
+            on: true, problem: nil,
+            interface: LinkInterface(name: interface ?? "en5", address: "10.0.0.2", adapter: "USB Ethernet", connection: .wired),
+            players: link5c.status.players, interfaces: link5c.status.interfaces, master: false, masterBpm: 120,
+            state: .up, number: 17)
+        link5c.status = answer
+        return answer
+    }
+
+    func stopLinkExport() async -> LinkStatus {
+        link5c.calls.append("stop")
+        link5c.status = LinkStatus(
+            on: false, problem: nil, interface: nil, players: [], interfaces: link5c.status.interfaces, master: false,
+            masterBpm: link5c.status.masterBpm, state: .off, number: nil)
+        return link5c.status
+    }
+
+    func linkLoadTrack(playerNumber: UInt8, trackID: String) async throws {
+        link5c.calls.append("load(\(playerNumber),\(trackID))")
+        if let failure = link5c.loadFailure { throw failure }
+    }
+
+    func linkSetMaster(on: Bool) async -> LinkStatus {
+        link5c.calls.append("master(\(on))")
+        link5c.status.master = on
+        return link5c.status
+    }
+
+    func linkNudgeMaster(deltaBpm: Double) async -> LinkStatus {
+        link5c.calls.append("nudge(\(deltaBpm))")
+        link5c.status.masterBpm += deltaBpm
+        return link5c.status
+    }
+
+    func linkTakeMasterTempo() async -> LinkStatus {
+        link5c.calls.append("takeTempo")
+        return link5c.status
     }
 }

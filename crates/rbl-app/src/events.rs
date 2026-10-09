@@ -5,6 +5,7 @@
 
 use serde::{Serialize, Serializer};
 
+use crate::link::{LinkStatusDto, PeerDto};
 use crate::dto::{EditHistoryDto, ExportProgressDto, ExportReportDto, LibraryProblemDto, SyncProgressDto};
 
 /// Something that happened which a front end may want to redraw for.
@@ -36,6 +37,10 @@ pub enum AppEvent {
     ExportDone(ExportReportDto),
     /// One step of a sync to one stick.
     SyncProgress(SyncProgressDto),
+    /// LINK changed: on or off, or the players on it.
+    LinkStatus(LinkStatusDto),
+    /// The set of players and mixers heard on the network changed.
+    LinkPeers(Vec<PeerDto>),
 }
 
 impl AppEvent {
@@ -55,6 +60,8 @@ impl AppEvent {
             Self::ExportProgress(_) => "export:progress",
             Self::ExportDone(_) => "export:done",
             Self::SyncProgress(_) => "sync:progress",
+            Self::LinkStatus(_) => "link:status",
+            Self::LinkPeers(_) => "link:peers",
         }
     }
 }
@@ -72,6 +79,8 @@ impl Serialize for AppEvent {
             Self::ImportProgress(progress) | Self::ExportProgress(progress) => progress.serialize(serializer),
             Self::ExportDone(report) => report.serialize(serializer),
             Self::SyncProgress(progress) => progress.serialize(serializer),
+            Self::LinkStatus(status) => status.serialize(serializer),
+            Self::LinkPeers(peers) => peers.serialize(serializer),
         }
     }
 }
@@ -115,6 +124,16 @@ mod tests {
         let sync = AppEvent::SyncProgress(SyncProgressDto { path: "/v/S".into(), state: "writing" });
         assert_eq!(sync.name(), "sync:progress");
         assert_eq!(serde_json::to_string(&sync).unwrap(), r#"{"path":"/v/S","state":"writing"}"#);
+        let status = AppEvent::LinkStatus(crate::link::LinkStatusDto::off(Some("why".into())));
+        assert_eq!(status.name(), "link:status");
+        let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(json["on"], false);
+        assert_eq!(json["problem"], "why");
+        assert_eq!(json["state"], "off");
+        assert_eq!(json["masterBpm"], 120.0);
+        let peers = AppEvent::LinkPeers(vec![crate::link::PeerDto { number: 2, name: "CDJ".into(), kind: "player".into(), address: "10.0.0.2".into() }]);
+        assert_eq!(peers.name(), "link:peers");
+        assert_eq!(serde_json::to_string(&peers).unwrap(), r#"[{"number":2,"name":"CDJ","kind":"player","address":"10.0.0.2"}]"#);
         let problem = AppEvent::LibraryProblem(LibraryProblemDto::Failed { message: "x".into() });
         assert_eq!(serde_json::to_string(&problem).unwrap(), r#"{"kind":"failed","message":"x"}"#);
     }

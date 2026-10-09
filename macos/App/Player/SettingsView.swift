@@ -1,16 +1,23 @@
 import SwiftUI
 
-/// The Settings window. Phase 6 adds the other panes; so far General (Library Protection) and Audio.
+/// The Settings window. Phase 6 adds the other panes; so far General (Library Protection), Audio and LINK.
 struct SettingsView: View {
     let player: PlayerModel
     let model: AppModel
+    /// `RBXPORT_SETTINGS_TAB=general|audio|link` opens a tab, for screenshots.
+    @State private var tab = ProcessInfo.processInfo.environment["RBXPORT_SETTINGS_TAB"] ?? "general"
 
     var body: some View {
-        TabView {
+        TabView(selection: $tab) {
             GeneralPane(model: model)
                 .tabItem { Label("General", systemImage: "gearshape") }
+                .tag("general")
             AudioPane(player: player)
                 .tabItem { Label("Audio", systemImage: "speaker.wave.2") }
+                .tag("audio")
+            LinkPane(model: model.link)
+                .tabItem { Label("LINK", systemImage: "link") }
+                .tag("link")
         }
         .frame(width: 520)
         .scenePadding()

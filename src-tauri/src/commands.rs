@@ -266,7 +266,7 @@ pub(crate) async fn reload<R: tauri::Runtime>(app: tauri::AppHandle<R>, state: A
 /// ever pressed.
 #[tauri::command]
 pub async fn link_status(state: State<'_, Arc<AppState>>) -> AppResult<LinkStatusDto> {
-    Ok(state.link_status().unwrap_or_else(|| LinkStatusDto::off(crate::link::refusal())))
+    Ok(rbl_app::link::status(&state))
 }
 
 /// The players and mixers heard on the network, whether or not LINK is on.
@@ -289,57 +289,16 @@ pub async fn start_link_export<R: tauri::Runtime>(
     alphanumeric_keys: Option<bool>,
     alphabetical_keys: Option<bool>,
 ) -> AppResult<LinkStatusDto> {
-    if let Some(status) = state.link_status() {
-        tracing::debug!("LINK asked to start while running; the running session stands");
-        return Ok(status);
-    }
-    if let Some(problem) = crate::link::refusal() {
-        tracing::warn!(%problem, "LINK refused");
-        return Ok(LinkStatusDto::off(Some(problem)));
-    }
-    tracing::info!(interface = interface.as_deref().unwrap_or("auto"), "LINK starting");
     let owner = Arc::clone(&state);
-    let emitter = app.clone();
-    let library_emitter = app.clone();
-    let started = blocking("start_link_export", move || {
-        let key_notation = if alphanumeric_keys.unwrap_or(false) {
-            rbl_link::KeyNotation::Alphanumeric
-        } else {
-            rbl_link::KeyNotation::Classic
+    let sink: Arc<dyn rbl_app::EventSink> = Arc::new(RtSink(app));
+    blocking("start_link_export", move || {
+        let keys = rbl_app::link::KeyOptions {
+            alphanumeric: alphanumeric_keys.unwrap_or(false),
+            alphabetical: alphabetical_keys.unwrap_or(false),
         };
-        let key_order = if alphabetical_keys.unwrap_or(false) {
-            rbl_link::KeyOrder::Alphabetical
-        } else {
-            rbl_link::KeyOrder::Musical
-        };
-        Ok(crate::link::Session::start(
-            &owner,
-            interface.as_deref(),
-            key_notation,
-            key_order,
-            move |status| {
-                let _ = tauri::Emitter::emit(&emitter, "link:status", status);
-            },
-            Arc::new(move |event, generation| {
-                let _ = tauri::Emitter::emit(&library_emitter, event, generation);
-            }),
-        ))
+        Ok(rbl_app::link::start_export(&owner, &sink, interface.as_deref(), keys))
     })
-    .await?;
-    match started {
-        Ok(session) => {
-            let status = session.status(state.library().ok().as_deref());
-            // A session started twice at once: the second is dropped
-            // outside the lock, which unbinds it.
-            drop(state.set_link(Some(session)));
-            let _ = tauri::Emitter::emit(&app, "link:status", status.clone());
-            Ok(status)
-        }
-        Err(problem) => {
-            tracing::warn!(%problem, "LINK could not start");
-            Ok(LinkStatusDto::off(Some(problem)))
-        }
-    }
+    .await
 }
 
 /// Turns LINK off: the players lose the source.
@@ -348,22 +307,9 @@ pub async fn stop_link_export<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     state: State<'_, Arc<AppState>>,
 ) -> AppResult<LinkStatusDto> {
-    // Dropped outside the lock, and off the async thread: stopping joins
-    // the servers' threads.
-    let session = state.set_link(None);
-    if session.is_some() {
-        tracing::info!("LINK stopping");
-    } else {
-        tracing::debug!("LINK asked to stop while off");
-    }
-    blocking("stop_link_export", move || {
-        drop(session);
-        Ok(())
-    })
-    .await?;
-    let status = LinkStatusDto::off(None);
-    let _ = tauri::Emitter::emit(&app, "link:status", status.clone());
-    Ok(status)
+    // Off the async thread: stopping joins the servers' threads.
+    let state = Arc::clone(&state);
+    blocking("stop_link_export", move || Ok(rbl_app::link::stop_export(&state, &RtSink(app)))).await
 }
 
 /// Tells a CDJ on the link to load a specific track from our library.
@@ -386,7 +332,7 @@ pub async fn link_load_track(
 #[tauri::command]
 pub async fn link_set_master(state: State<'_, Arc<AppState>>, on: bool) -> AppResult<LinkStatusDto> {
     state.link_set_master(on);
-    Ok(state.link_status().unwrap_or_else(|| LinkStatusDto::off(crate::link::refusal())))
+    Ok(rbl_app::link::status(&state))
 }
 
 /// Nudges the master tempo by `delta_bpm` (rekordbox's −/+ is ±1), and
@@ -394,7 +340,7 @@ pub async fn link_set_master(state: State<'_, Arc<AppState>>, on: bool) -> AppRe
 #[tauri::command]
 pub async fn link_nudge_master(state: State<'_, Arc<AppState>>, delta_bpm: f64) -> AppResult<LinkStatusDto> {
     state.link_nudge_master(delta_bpm);
-    Ok(state.link_status().unwrap_or_else(|| LinkStatusDto::off(crate::link::refusal())))
+    Ok(rbl_app::link::status(&state))
 }
 
 /// Takes the current master player's tempo as the master tempo (rekordbox's
@@ -402,7 +348,7 @@ pub async fn link_nudge_master(state: State<'_, Arc<AppState>>, delta_bpm: f64) 
 #[tauri::command]
 pub async fn link_take_master_tempo(state: State<'_, Arc<AppState>>) -> AppResult<LinkStatusDto> {
     state.link_take_master_tempo();
-    Ok(state.link_status().unwrap_or_else(|| LinkStatusDto::off(crate::link::refusal())))
+    Ok(rbl_app::link::status(&state))
 }
 
 /// Writes a playlist to a stick. See `rbl_app::export::export_playlist`.
