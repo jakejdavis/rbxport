@@ -13,7 +13,7 @@ use tauri_plugin_opener::OpenerExt;
 use crate::link::LinkStatusDto;
 use rbl_app::media::waveform_bytes;
 use crate::dto::{
-    AudioDeviceDto, AudioDevicesDto, CueDto, DeviceDto, ExportReportDto,
+    AudioDevicesDto, CueDto, DeviceDto, ExportReportDto,
     EditHistoryDto, ImportReportDto, LibrarySummaryDto, LimiterDto, MissingTrackDto, MissingTracksDto, PhraseDto, RowDto,
     TreeNodeDto, ViewHandleDto, ViewSpecDto,
     BackupDto, DeviceSyncStateDto, DuplicateGroupDto, DuplicateTrackDto, DuplicatesDto,
@@ -1650,15 +1650,7 @@ pub async fn deck_master_tempo<R: tauri::Runtime>(
 pub async fn audio_devices(
     player: State<'_, Arc<crate::player::Player>>,
 ) -> AppResult<AudioDevicesDto> {
-    let chosen = player.device();
-    Ok(AudioDevicesDto {
-        devices: rbl_deck::output_devices()
-            .into_iter()
-            .map(|device| AudioDeviceDto { id: device.id, name: device.name })
-            .collect(),
-        default: rbl_deck::default_output_device().map(|device| device.id),
-        chosen,
-    })
+    Ok(player.audio_devices())
 }
 
 /// Chooses an output. `None` — an absent id — is the system default.

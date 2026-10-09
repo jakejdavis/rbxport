@@ -29,7 +29,7 @@ struct TrackTable: NSViewRepresentable {
         table.delegate = context.coordinator
         table.target = context.coordinator
         table.doubleAction = #selector(Coordinator.rowDoubleClicked)
-        table.onReturn = { [weak coordinator = context.coordinator] in coordinator?.loadSelectedToDeck() }
+        table.onReturn = { [weak coordinator = context.coordinator] shift in coordinator?.loadSelectedToDeck(deck: shift ? .b : .a) }
         table.onEscape = { [weak model] in model?.clearSearch() }
         table.menuProvider = { [weak coordinator = context.coordinator] row in coordinator?.menu(forRow: row) }
         context.coordinator.table = table
@@ -207,6 +207,24 @@ struct TrackTable: NSViewRepresentable {
                     }
                 }
             }
+            // RBXPORT_LOAD_ROW_B=<n> loads that row onto deck B (the 2 PLAYER layout; RBXPORT_PLAY_B=1
+            // plays it, RBXPORT_SEEK_B=<seconds> moves its head once it is ready).
+            if !autoLoadedB, let text = env["RBXPORT_LOAD_ROW_B"], let n = Int(text), range.contains(n),
+                let row = pager.peek(at: n)
+            {
+                autoLoadedB = true
+                model.loadToDeck(trackID: row.id, deck: .b)
+                if env["RBXPORT_PLAY_B"] == "1" { model.player.deckB.playWhenLoaded() }
+                if let text = env["RBXPORT_SEEK_B"], let seconds = Double(text) {
+                    let deck = model.player.deckB
+                    Task { @MainActor in
+                        for _ in 0..<400 where !(deck.isLoaded && !deck.beats.isEmpty && deck.detailBytes != nil) {
+                            try? await Task.sleep(for: .milliseconds(50))
+                        }
+                        deck.seek(toSeconds: seconds)
+                    }
+                }
+            }
             if !autoPreviewed, let text = env["RBXPORT_PREVIEW_ROW"], let n = Int(text), range.contains(n),
                 let row = pager.peek(at: n)
             {
@@ -217,6 +235,7 @@ struct TrackTable: NSViewRepresentable {
         }
         private var autoSelected = false
         private var autoLoaded = false
+        private var autoLoadedB = false
         private var autoPreviewed = false
 
         /// Selects the rows of `range` whose tracks are in the model's selection.
@@ -241,9 +260,9 @@ struct TrackTable: NSViewRepresentable {
             model.loadToDeck(trackID: row.id)
         }
 
-        func loadSelectedToDeck() {
+        func loadSelectedToDeck(deck: Deck = .a) {
             guard let table, let first = table.selectedRowIndexes.first, let row = pager.peek(at: first) else { return }
-            model.loadToDeck(trackID: row.id)
+            model.loadToDeck(trackID: row.id, deck: deck)
         }
 
         // MARK: Context menu
@@ -442,7 +461,8 @@ enum ColumnSizer {
 /// `NSTableView` plus the keys rekordbox users expect: Home/End, Page Up/Down and
 /// Command-Up/Down move the selection (Shift extends it), Return loads, Escape clears search.
 final class TrackNSTableView: NSTableView {
-    var onReturn: (() -> Void)?
+    /// Return loads onto deck A; Shift-Return (the flag) onto deck B.
+    var onReturn: ((Bool) -> Void)?
     var onEscape: (() -> Void)?
     /// The menu for a right-click on a row (-1 when it hit no row).
     var menuProvider: ((Int) -> NSMenu?)?
@@ -456,7 +476,7 @@ final class TrackNSTableView: NSTableView {
         let extend = flags.contains(.shift)
         let plain = flags.subtracting(.shift)
         switch (event.keyCode, plain) {
-        case (36, []), (76, []): onReturn?()
+        case (36, []), (76, []): onReturn?(extend)
         case (53, []): onEscape?()
         case (115, []), (126, .command): move(to: 0, extending: extend)  // Home, Cmd-Up
         case (119, []), (125, .command): move(to: numberOfRows - 1, extending: extend)  // End, Cmd-Down

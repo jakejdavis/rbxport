@@ -10,7 +10,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use rbl_app::error::run_command;
-use rbl_app::player::{DeckEventDto, DeckTickDto, MeterDto, PlaybackSink, Player, TickDto};
+use rbl_app::dto::LimiterDto;
+use rbl_app::player::{DeckEventDto, DeckTickDto, MeterDto, MixerState, PlaybackSink, Player, TickDto};
 use rbl_app::preview::{Preview, PreviewStateDto};
 use rbl_app::state::AppState;
 use rbl_app::track_data;
@@ -40,6 +41,109 @@ pub enum MetronomeVolume {
     Small,
     Middle,
     Large,
+}
+
+/// One of the channel strip's three bands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum EqBand {
+    Low,
+    Mid,
+    High,
+}
+
+impl From<EqBand> for rbl_deck::Band {
+    fn from(band: EqBand) -> Self {
+        match band {
+            EqBand::Low => Self::Low,
+            EqBand::Mid => Self::Mid,
+            EqBand::High => Self::High,
+        }
+    }
+}
+
+/// One deck's channel strip.
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+#[allow(clippy::struct_excessive_bools, reason = "the three kill buttons")]
+pub struct ChannelState {
+    /// 0 to 2, 1 is unity.
+    pub trim: f32,
+    /// Knob positions, 0.5 at centre.
+    pub low: f32,
+    pub mid: f32,
+    pub high: f32,
+    pub kill_low: bool,
+    pub kill_mid: bool,
+    pub kill_high: bool,
+}
+
+/// The mixer as the engine holds it (or will, when it opens).
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+pub struct MixerSnapshot {
+    pub a: ChannelState,
+    pub b: ChannelState,
+    /// 0 is deck A alone, 1 is deck B alone, 0.5 is both.
+    pub crossfade: f32,
+    /// ISOLATOR rather than EQ: the bottom of each band is silence.
+    pub isolator: bool,
+}
+
+fn channel_of(state: &MixerState, index: usize) -> ChannelState {
+    let bands = state.bands[index];
+    let kills = state.kills[index];
+    ChannelState {
+        trim: state.trim[index],
+        low: bands[0],
+        mid: bands[1],
+        high: bands[2],
+        kill_low: kills[0],
+        kill_mid: kills[1],
+        kill_high: kills[2],
+    }
+}
+
+impl From<MixerState> for MixerSnapshot {
+    fn from(state: MixerState) -> Self {
+        Self { a: channel_of(&state, 0), b: channel_of(&state, 1), crossfade: state.crossfade, isolator: state.isolator }
+    }
+}
+
+/// The master limiter. The engine clamps; what comes back is what is set.
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+pub struct Limiter {
+    pub enabled: bool,
+    /// -24 to +24 dB.
+    pub input_gain_db: f32,
+    /// -12 to 0 dBFS.
+    pub ceiling_db: f32,
+    /// 10 to 1000 ms.
+    pub release_ms: f32,
+}
+
+impl From<LimiterDto> for Limiter {
+    fn from(l: LimiterDto) -> Self {
+        Self { enabled: l.enabled, input_gain_db: l.input_gain_db, ceiling_db: l.ceiling_db, release_ms: l.release_ms }
+    }
+}
+
+impl From<Limiter> for LimiterDto {
+    fn from(l: Limiter) -> Self {
+        Self { enabled: l.enabled, input_gain_db: l.input_gain_db, ceiling_db: l.ceiling_db, release_ms: l.release_ms }
+    }
+}
+
+/// One output the audio can go to.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AudioDevice {
+    pub id: String,
+    pub name: String,
+}
+
+/// The outputs, the system's own choice among them, and the one this app was told to use.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AudioDevices {
+    pub devices: Vec<AudioDevice>,
+    pub default_id: Option<String>,
+    pub chosen_id: Option<String>,
 }
 
 /// One deck in a tick. Frames are at the tick's `sample_rate`.
@@ -123,6 +227,9 @@ pub struct Meters {
     pub peak_right: f32,
     pub master: f32,
     pub reduction: f32,
+    /// Each deck's loudest sample after its channel strip, for the channel meters.
+    pub deck_a_peak: f32,
+    pub deck_b_peak: f32,
 }
 
 impl From<MeterDto> for Meters {
@@ -134,6 +241,8 @@ impl From<MeterDto> for Meters {
             peak_right: m.peak_right,
             master: m.master,
             reduction: m.reduction,
+            deck_a_peak: m.deck_a_peak,
+            deck_b_peak: m.deck_b_peak,
         }
     }
 }
@@ -386,6 +495,105 @@ impl Playback {
 
     pub fn set_key_shift(&self, deck: Deck, semitones: i8) {
         self.player.set_key_shift(deck.into(), semitones);
+    }
+
+    /// Starts a deck after `delay_ms` of silence counted by the audio callback:
+    /// quantized play on a synced deck, held for the master's next beat.
+    pub fn play_after(&self, deck: Deck, delay_ms: f64) -> Result<(), FfiError> {
+        ffi("deck_play_after", || {
+            let engine = self.player.engine()?;
+            // A delay is at most a beat; a negative or absurd one is zero.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let frames = if delay_ms.is_finite() && delay_ms > 0.0 {
+                (delay_ms.min(60_000.0) * f64::from(engine.sample_rate()) / 1000.0).round() as u64
+            } else {
+                0
+            };
+            engine.play_after(deck.into(), frames);
+            self.player.start_ticker();
+            Ok(())
+        })
+    }
+
+    // MARK: Mixer, master and limiter. None of these opens the output: the values are
+    // remembered and applied when the engine is built.
+
+    /// The mixer as it stands: read from the engine when it is up, else as remembered.
+    pub fn mixer(&self) -> MixerSnapshot {
+        self.player.mixer().into()
+    }
+
+    /// The deck's gain, 0 to 2.
+    pub fn set_channel_trim(&self, deck: Deck, trim: f32) {
+        self.player.set_channel_trim(deck.into(), trim);
+    }
+
+    /// A band's knob position, 0 to 1 with 0.5 at centre.
+    pub fn set_channel_band(&self, deck: Deck, band: EqBand, position: f32) {
+        self.player.set_channel_band(deck.into(), band.into(), position);
+    }
+
+    pub fn set_channel_kill(&self, deck: Deck, band: EqBand, killed: bool) {
+        self.player.set_channel_kill(deck.into(), band.into(), killed);
+    }
+
+    /// 0 is deck A alone, 1 is deck B alone, 0.5 is both.
+    pub fn set_crossfade(&self, position: f32) {
+        self.player.set_crossfade(position);
+    }
+
+    pub fn set_eq_curve(&self, isolator: bool) {
+        self.player.set_eq_curve(isolator);
+    }
+
+    /// The master level as a linear gain, 0 to +2 dB.
+    pub fn set_master_level(&self, level: f32) {
+        self.player.set_master_level(level);
+    }
+
+    pub fn master_level(&self) -> f32 {
+        self.player.master_level()
+    }
+
+    pub fn limiter(&self) -> Limiter {
+        self.player.limiter().into()
+    }
+
+    /// Sets the limiter and returns what the engine's clamping made of it.
+    pub fn set_limiter(&self, limiter: Limiter) -> Limiter {
+        self.player.set_limiter(limiter.into()).into()
+    }
+
+    // MARK: Audio output
+
+    /// The outputs now; read each time the settings pane opens. Opens nothing.
+    pub fn audio_devices(&self) -> AudioDevices {
+        let d = self.player.audio_devices();
+        AudioDevices {
+            devices: d.devices.into_iter().map(|x| AudioDevice { id: x.id, name: x.name }).collect(),
+            default_id: d.default,
+            chosen_id: d.chosen,
+        }
+    }
+
+    /// Chooses an output (`None` is the system default). A live engine is dropped,
+    /// and the listener hears `on_reset`: reload the decks. Returns whether it was.
+    pub fn set_audio_device(&self, device: Option<String>) -> bool {
+        let dropped = self.player.set_device(device);
+        if dropped {
+            self.player.notify_reset();
+        }
+        dropped
+    }
+
+    /// The sample rate and buffer size to open the output with (`None` leaves it to the
+    /// device). Like a device change this drops a live engine and signals a reset.
+    pub fn set_audio_config(&self, sample_rate: Option<u32>, buffer_frames: Option<u32>) -> bool {
+        let dropped = self.player.set_wish(rbl_deck::StreamWish { sample_rate, buffer_frames });
+        if dropped {
+            self.player.notify_reset();
+        }
+        dropped
     }
 
     /// Both decks now, for a front end that is starting up or has reset.

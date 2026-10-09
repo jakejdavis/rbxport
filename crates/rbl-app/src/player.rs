@@ -25,7 +25,7 @@ use parking_lot::Mutex;
 use rbl_deck::{Band, Curve, Deck, DeckEvent, Engine, NullSink, Render, Sink, StreamWish};
 use serde::Serialize;
 
-use crate::dto::LimiterDto;
+use crate::dto::{AudioDeviceDto, AudioDevicesDto, LimiterDto};
 use crate::error::{AppError, AppResult, ErrorKind};
 
 /// How often the meters go out. A tenth of a second is a meter that steps
@@ -148,6 +148,10 @@ pub struct MeterDto {
     /// How far the limiter turned the sum down since the last tick, in dB;
     /// 0 when it did nothing.
     pub reduction: f32,
+    /// Each deck's loudest sample since the last meter, after its channel
+    /// strip: the channel meters.
+    pub deck_a_peak: f32,
+    pub deck_b_peak: f32,
 }
 
 /// What a deck reports outside the tick.
@@ -252,21 +256,26 @@ pub fn null_audio_requested() -> bool {
     std::env::var_os("RBXPORT_NULL_AUDIO").is_some_and(|v| !v.is_empty() && v != "0")
 }
 
-/// Every setting the interface has given the player, kept so that setting one
-/// does not open the device, and so a rebuilt engine gets them all back.
+/// Every mixer and deck setting the interface has given the player, kept so that
+/// setting one does not open the device, and so a rebuilt engine gets them all
+/// back. [`Player::mixer`] reads it back for the interface.
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct Remembered {
-    trim: [f32; 2],
-    bands: [[f32; 3]; 2],
-    kills: [[bool; 3]; 2],
-    crossfade: f32,
-    isolator: bool,
+pub struct MixerState {
+    /// Per deck, A then B: the trim, 0 to 2.
+    pub trim: [f32; 2],
+    /// Per deck, then low, mid, high: knob positions, 0.5 at centre.
+    pub bands: [[f32; 3]; 2],
+    /// Per deck, then low, mid, high.
+    pub kills: [[bool; 3]; 2],
+    /// 0 is deck A alone, 1 is deck B alone.
+    pub crossfade: f32,
+    pub isolator: bool,
     tempo: [f32; 2],
     master_tempo: [bool; 2],
     key_shift: [i8; 2],
 }
 
-impl Default for Remembered {
+impl Default for MixerState {
     fn default() -> Self {
         Self {
             trim: [1.0; 2],
@@ -317,7 +326,7 @@ pub struct Player {
     /// The master limiter as the interface last set it.
     limiter: Mutex<LimiterDto>,
     master_level: Mutex<f32>,
-    remembered: Mutex<Remembered>,
+    remembered: Mutex<MixerState>,
     /// Whether the engine's load events go to the sink. The browser's preview
     /// player is a second engine and keeps quiet: its deck A is not the
     /// player's deck A.
@@ -356,7 +365,7 @@ impl Player {
                 ceiling_db: rbl_deck::DEFAULT_CEILING_DB,
                 release_ms: rbl_deck::DEFAULT_RELEASE_MS,
             }),
-            remembered: Mutex::new(Remembered::default()),
+            remembered: Mutex::new(MixerState::default()),
             emits_deck_events: true,
         }
     }
@@ -442,7 +451,7 @@ impl Player {
         Ok(engine)
     }
 
-    fn apply_remembered(engine: &Engine, saved: &Remembered) {
+    fn apply_remembered(engine: &Engine, saved: &MixerState) {
         for (index, deck) in [Deck::A, Deck::B].into_iter().enumerate() {
             engine.set_tempo(deck, saved.tempo[index]);
             engine.set_master_tempo(deck, saved.master_tempo[index]);
@@ -467,6 +476,31 @@ impl Player {
         if let Some(engine) = self.opened() {
             engine.master().set_gain(safe);
         }
+    }
+
+    /// The master level last set (or the engine's own, if it is up).
+    pub fn master_level(&self) -> f32 {
+        self.opened().map_or_else(|| *self.master_level.lock(), |engine| engine.master().gain())
+    }
+
+    /// The mixer as it stands: read back from the engine when it is up, else
+    /// what was remembered for it. A strip that mounts late shows this rather
+    /// than resetting the engine to its defaults.
+    pub fn mixer(&self) -> MixerState {
+        let mut state = *self.remembered.lock();
+        if let Some(engine) = self.opened() {
+            let mixer = engine.mixer();
+            for (index, channel) in mixer.channels.iter().take(2).enumerate() {
+                state.trim[index] = channel.trim();
+                for (b, band) in BANDS.into_iter().enumerate() {
+                    state.bands[index][b] = channel.band(band);
+                    state.kills[index][b] = channel.killed(band);
+                }
+            }
+            state.crossfade = mixer.crossfade();
+            state.isolator = mixer.curve() == Curve::Isolator;
+        }
+        state
     }
 
     /// How fast a deck plays, as a multiple of the file's speed. Remembered,
@@ -585,6 +619,20 @@ impl Player {
         self.device.lock().clone()
     }
 
+    /// The outputs the audio could go to, and which one is in use. Read every
+    /// time: an interface is plugged in while the app is open more often than
+    /// not. Enumerating opens nothing.
+    pub fn audio_devices(&self) -> AudioDevicesDto {
+        AudioDevicesDto {
+            devices: rbl_deck::output_devices()
+                .into_iter()
+                .map(|device| AudioDeviceDto { id: device.id, name: device.name })
+                .collect(),
+            default: rbl_deck::default_output_device().map(|device| device.id),
+            chosen: self.device(),
+        }
+    }
+
     /// The rate and buffer size to open the device with. A change drops the
     /// engine, as a device change does: a stream has the rate it was opened at.
     pub fn set_wish(&self, wish: StreamWish) -> bool {
@@ -657,6 +705,7 @@ impl Player {
             let (peak_left, peak_right) = master.peaks();
             let reduction = master.reduction_db();
             let (rms_left, rms_right) = master.rms();
+            let [first_deck, second_deck] = master.deck_peaks();
             if let Some(sink) = &sink {
                 sink.meters(&MeterDto {
                     peak_left,
@@ -665,6 +714,8 @@ impl Player {
                     rms_right,
                     master: master.gain(),
                     reduction,
+                    deck_a_peak: first_deck,
+                    deck_b_peak: second_deck,
                 });
             }
 
@@ -904,9 +955,17 @@ mod tests {
         player.set_channel_kill(Deck::A, Band::Low, true);
         player.set_crossfade(0.9);
         player.set_eq_curve(true);
+        let set = player.set_limiter(LimiterDto { input_gain_db: -2.0, enabled: true, ceiling_db: -1.0, release_ms: 120.0 });
+        player.set_metronome(rbl_deck::ClickSound::Three, rbl_deck::ClickVolume::Small);
+        // Choosing a device or a rate only drops an engine that is up; there is none.
+        assert!(!player.set_device(Some("some-device".to_owned())));
+        assert!(!player.set_wish(StreamWish { sample_rate: Some(48_000), buffer_frames: Some(256) }));
         assert!(!opened.load(Ordering::SeqCst), "a setter opened the audio device");
         assert!(player.opened().is_none());
         assert_eq!(player.tempo(Deck::A), 1.08);
+        assert_eq!(player.limiter(), set);
+        assert_eq!(player.master_level(), 0.5);
+        player.set_device(None);
 
         // They land when the engine is built.
         let engine = player.engine().unwrap();
@@ -915,8 +974,77 @@ mod tests {
         assert_eq!(engine.mixer().crossfade(), 0.9);
         assert_eq!(engine.mixer().channels[0].trim(), 0.7);
         assert_eq!(engine.mixer().channels[1].band(Band::Mid), 0.2);
+        assert!(engine.limiter().enabled());
+        assert_eq!(engine.limiter().ceiling_db(), -1.0);
         wait("the remembered tempo to land", || (engine.snapshot().a.tempo - 1.08).abs() < 1e-6);
         assert!(engine.snapshot().a.master_tempo);
+    }
+
+    #[test]
+    fn the_mixer_reads_back_what_was_set_before_and_after_the_engine_opens() {
+        let player = Player::with_sink(silent_opener());
+        let defaults = player.mixer();
+        assert_eq!(defaults.trim, [1.0, 1.0]);
+        assert_eq!(defaults.crossfade, 0.5);
+        assert!(player.opened().is_none());
+
+        player.set_channel_trim(Deck::B, 1.5);
+        player.set_channel_band(Deck::A, Band::Low, 0.25);
+        player.set_channel_kill(Deck::B, Band::High, true);
+        player.set_crossfade(0.8);
+        let before = player.mixer();
+        assert_eq!(before.trim, [1.0, 1.5]);
+        assert_eq!(before.bands[0], [0.25, 0.5, 0.5]);
+        assert_eq!(before.kills[1], [false, false, true]);
+        assert_eq!(before.crossfade, 0.8);
+
+        // Once the engine is up the strip is read from it, so a remounted
+        // interface shows the engine's truth rather than resetting it.
+        let engine = player.engine().unwrap();
+        assert_eq!(player.mixer(), before);
+        engine.mixer().set_crossfade(0.1);
+        engine.mixer().channels[0].set_trim(0.4);
+        let after = player.mixer();
+        assert_eq!(after.crossfade, 0.1);
+        assert_eq!(after.trim, [0.4, 1.5]);
+        assert_eq!(player.master_level(), engine.master().gain());
+    }
+
+    #[test]
+    fn a_device_or_rate_change_drops_a_live_engine_and_only_then() {
+        let player = Player::with_sink(silent_opener());
+        player.engine().unwrap();
+        assert!(!player.set_device(None), "an unchanged device must not drop the engine");
+        assert!(player.opened().is_some());
+        assert!(player.set_device(Some("other".to_owned())));
+        assert!(player.opened().is_none());
+        assert_eq!(player.device().as_deref(), Some("other"));
+        assert_eq!(player.audio_devices().chosen.as_deref(), Some("other"));
+        player.engine().unwrap();
+        assert!(player.set_wish(StreamWish { sample_rate: Some(96_000), buffer_frames: Some(2_048) }));
+        assert!(player.opened().is_none());
+        assert_eq!(player.wish().buffer_frames, Some(2_048));
+        // The mixer survives the rebuild.
+        player.set_crossfade(0.3);
+        player.engine().unwrap();
+        assert_eq!(player.mixer().crossfade, 0.3);
+    }
+
+    #[test]
+    fn each_decks_own_peak_is_reported_apart_from_the_master() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("tone.wav");
+        write_wav(&wav, 4);
+        let (player, _recorder) = silent_player();
+        load(&player, Deck::B, &wav, 1);
+        let engine = player.engine().unwrap();
+        engine.play(Deck::B);
+        // No ticker: it would read, and so clear, the peaks this waits on.
+        wait("deck B to be heard on its own channel", || {
+            let [a, b] = engine.master().deck_peaks();
+            b > 0.05 && a == 0.0
+        });
+        engine.pause(Deck::B);
     }
 
     #[test]

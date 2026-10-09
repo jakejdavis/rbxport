@@ -29,15 +29,27 @@ struct RbxportApp: App {
                 .frame(minWidth: 980, minHeight: 640)
                 .task {
                     guard !isUnderTest else { return }
+                    applyDevHooks()
                     model.start()
                     model.player.installKeyMonitor()
                 }
         }
+        .defaultSize(width: 1280, height: 900)
         .commands {
             CommandGroup(after: .textEditing) {
                 Button("Find") { model.focusSearch() }.keyboardShortcut("f", modifiers: .command)
             }
             CommandGroup(after: .sidebar) {
+                Menu("Layout") {
+                    ForEach(PlayerLayout.allCases) { layout in
+                        Toggle(
+                            layout.label,
+                            isOn: Binding(
+                                get: { model.player.layout == layout }, set: { if $0 { model.player.layout = layout } })
+                        )
+                        .keyboardShortcut(KeyEquivalent(layout.keyEquivalent), modifiers: .command)
+                    }
+                }
                 Picker(
                     "Key Display",
                     selection: Binding(get: { model.keyStyle }, set: { model.keyStyle = $0 })
@@ -75,6 +87,31 @@ struct RbxportApp: App {
                 Toggle(
                     "Show Playlist Counts",
                     isOn: Binding(get: { model.sidebar.showChildCounts }, set: { model.sidebar.showChildCounts = $0 }))
+            }
+        }
+        Settings {
+            SettingsView(player: model.player)
+        }
+    }
+
+    /// Dev aids for screenshots: `RBXPORT_LAYOUT=one|two|simple|browser` (not remembered) and
+    /// `RBXPORT_OPEN_SETTINGS=1`. Launch with `RBXPORT_NULL_AUDIO=1` so nothing is audible.
+    @MainActor private func applyDevHooks() {
+        let env = ProcessInfo.processInfo.environment
+        if let name = env["RBXPORT_LAYOUT"], let layout = PlayerLayout(rawValue: name) {
+            model.player.persistsLayout = false
+            model.player.layout = layout
+        }
+        if env["RBXPORT_OPEN_SETTINGS"] == "1" {
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(2))
+                NSApp.activate()
+                // The app menu's Settings item (Command-comma), as a click would run it.
+                if let menu = NSApp.mainMenu?.items.first?.submenu,
+                    let index = menu.items.firstIndex(where: { $0.keyEquivalent == "," })
+                {
+                    menu.performActionForItem(at: index)
+                }
             }
         }
     }

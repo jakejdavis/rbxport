@@ -143,8 +143,9 @@ final class AppModel {
     private(set) var selectedIDs: Set<String> = []
     private(set) var selectionAnchor: String?
     private(set) var selectionSummary: SelectionSummary?
-    /// Called for Return or a double-click on a track: loads it onto deck A.
-    var onLoadToDeck: (String) -> Void = { _ in }
+    /// Called for Return, Shift-Return or a double-click on a track: loads it onto a deck (A by
+    /// default, B for Shift-Return).
+    var onLoadToDeck: (String, Deck) -> Void = { _, _ in }
     private(set) var sortKey: SortKey = .trackNo
     private(set) var descending = false
 
@@ -175,8 +176,12 @@ final class AppModel {
         waveformPalette = defaults.string(forKey: "waveformPalette").flatMap(WaveformPalette.init) ?? .bands
         player = PlayerModel(backend: backend, waveforms: waveforms, artwork: artwork, defaults: defaults)
         info.setActive(infoPanelOpen)
-        onLoadToDeck = { [weak self] id in
+        onLoadToDeck = { [weak self] id, deck in
             guard let self else { return }
+            self.player.load(trackID: id, row: self.loadedRow(id: id), into: deck)
+        }
+        player.loadSelected = { [weak self] in
+            guard let self, self.selectedIDs.count == 1, let id = self.selectedIDs.first else { return }
             self.player.load(trackID: id, row: self.loadedRow(id: id))
         }
     }
@@ -306,7 +311,7 @@ final class AppModel {
 
     // MARK: Selection
 
-    func loadToDeck(trackID: String) { onLoadToDeck(trackID) }
+    func loadToDeck(trackID: String, deck: Deck = .a) { onLoadToDeck(trackID, deck) }
 
     private func clearTrackSelection() {
         selectionToken += 1

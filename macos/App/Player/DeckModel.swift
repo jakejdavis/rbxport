@@ -14,6 +14,7 @@ struct DeckTrack: Equatable, Sendable {
     var hasArtwork: Bool
     var artworkHue: Double
     var analysed: Bool
+    var rating = 0
     var memoryCues: [UInt32]
     var hotCues: [HotCue]
 
@@ -27,6 +28,7 @@ struct DeckTrack: Equatable, Sendable {
         hasArtwork = row.hasArtwork
         artworkHue = Double(row.artworkHue)
         analysed = row.analysed != 0
+        rating = Int(row.rating)
         memoryCues = row.memoryCues
         hotCues = row.hotCues
     }
@@ -41,6 +43,7 @@ struct DeckTrack: Equatable, Sendable {
         hasArtwork = d.hasArtwork
         artworkHue = 0
         analysed = true
+        rating = Int(d.rating)
         memoryCues = []
         hotCues = []
     }
@@ -90,7 +93,9 @@ final class DeckModel {
     private(set) var loopLength = LoopLength.default
     /// A LOOP IN waiting for its OUT, in ms.
     private(set) var pendingLoopIn: Double?
-    var jumpSize = JumpSize.default
+    var jumpSize = JumpSize.default {
+        didSet { if jumpSize != oldValue && !applyingLink { onJumpSizeChange?(jumpSize) } }
+    }
     private(set) var keyShift = 0
     private(set) var shiftsKey = true
     private(set) var metronome = false
@@ -135,6 +140,16 @@ final class DeckModel {
     @ObservationIgnored private var tickHoldUntil: TimeInterval = 0
     @ObservationIgnored private var scrubResume = false
     @ObservationIgnored fileprivate var rawPhrases: [Phrase] = []
+
+    // Sync and DUAL CONTROL (the two-deck layout). The player wires these.
+    /// BEAT SYNC is lit: the deck follows the master's tempo.
+    private(set) var synced = false
+    /// Called when the zoom or the jump size changes on this deck, for DUAL CONTROL to mirror.
+    @ObservationIgnored var onZoomChange: ((Double) -> Void)?
+    @ObservationIgnored var onJumpSizeChange: ((JumpSize) -> Void)?
+    /// Called when what a follower matches changes: this deck's tempo, or its track.
+    @ObservationIgnored var onSyncInputChange: (() -> Void)?
+    @ObservationIgnored private var applyingLink = false
 
     /// How long after a seek an old position is still ignored.
     static let landingSeconds = 0.5
@@ -204,6 +219,7 @@ final class DeckModel {
         overviewTicket = nil
         requestArtwork(for: newTrack)
         playback.load(deck: deck, trackID: newTrack.id, loadID: loadID)
+        onSyncInputChange?()
     }
 
     func unload() {
@@ -220,6 +236,8 @@ final class DeckModel {
         overviewTicket = nil
         loadID = 0
         resetAnalysis(for: nil)
+        synced = false
+        onSyncInputChange?()
     }
 
     /// Starts playing as soon as the track is ready (for a deck that was playing when a new
@@ -281,7 +299,8 @@ final class DeckModel {
         }
         let next = Anchor(
             frames: t.frames, at: time, sampleRate: sampleRate, playing: t.playing, generation: t.generation,
-            rate: Double(t.tempo))
+            // A play held for the beat has not started: the head stays put until it does.
+            rate: t.startInFrames > 0 ? 0 : Double(t.tempo))
         if next != anchor { anchor = next }
     }
 
@@ -361,11 +380,15 @@ final class DeckModel {
 
     // MARK: Tempo
 
-    func setTempo(_ value: Double) {
+    /// `bySync` is BEAT SYNC matching the master; any other change is the DJ's and puts the
+    /// sync light out.
+    func setTempo(_ value: Double, bySync: Bool = false) {
         let clamped = min(max(value, TempoRange.minTempo), TempoRange.maxTempo)
+        if !bySync && synced { synced = false }
         rebase(rate: clamped)
         tempo = clamped
         playback.setTempo(deck: deck, tempo: Float(clamped))
+        onSyncInputChange?()
     }
 
     /// The fader moved to `position`, -1 (slow end) to 1 (fast end).
@@ -515,9 +538,23 @@ extension DeckModel {
 
     // MARK: Zoom
 
-    func zoom(direction: Int) { zoomBars = DetailZoom.step(zoomBars, direction: direction) }
+    func zoom(direction: Int) { setZoom(bars: DetailZoom.step(zoomBars, direction: direction)) }
 
-    func setZoom(bars: Double) { zoomBars = DetailZoom.clamped(bars) }
+    func setZoom(bars: Double) {
+        let next = DetailZoom.clamped(bars)
+        guard next != zoomBars else { return }
+        zoomBars = next
+        onZoomChange?(next)
+    }
+
+    /// DUAL CONTROL: take the other deck's zoom or jump size without echoing it back.
+    func applyLinked(zoomBars bars: Double) { zoomBars = DetailZoom.clamped(bars) }
+
+    func applyLinked(jumpSize size: JumpSize) {
+        applyingLink = true
+        jumpSize = size
+        applyingLink = false
+    }
 
     // MARK: Quantize
 
@@ -659,6 +696,26 @@ extension DeckModel {
             fromMs: headMs, direction: direction, size: jumpSize, grid: beats,
             bpmX100: Double(track?.bpmX100 ?? 0), durationMs: durationSeconds * 1000)
         seek(toSeconds: target / 1000)
+    }
+
+    // MARK: Sync
+
+    func setSynced(_ on: Bool) { synced = on && isLoaded }
+
+    /// What a follower needs to know about this deck (`SyncDeck`).
+    func syncState(at time: TimeInterval? = nil) -> SyncDeck {
+        SyncDeck(
+            bpmX100: Double(track?.bpmX100 ?? 0), tempo: tempo, playing: anchor.playing,
+            position: position(at: time ?? now()), grid: beats)
+    }
+
+    /// PLAY held until the master's next beat: the engine counts `delayMs` in output frames.
+    func playAfter(delayMs: Double) {
+        guard isLoaded else { return }
+        cue.latch()
+        latchPad()
+        rebase(playing: true)
+        playback.playAfter(deck: deck, delayMs: delayMs)
     }
 
     // MARK: Key shift, metronome

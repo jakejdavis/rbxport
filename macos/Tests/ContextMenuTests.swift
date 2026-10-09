@@ -31,13 +31,13 @@ struct ContextMenuTests {
         #expect(live.map(\.command) == [.showInformation, .showInFinder])
     }
 
-    @Test func loadToPlayer1IsLiveForOneTrackAndPlayer2WaitsForTheDualDecks() {
+    @Test func loadToPlayer1And2AreLiveForOneTrack() {
         let rows = ContextMenus.trackMenu(.init(selectionCount: 1))
         let load = items(rows).first { $0.title == "Load" }!
         #expect(load.isEnabled)
         #expect(titles(load.submenu!) == ["Load track to player 1", "Load track to player 2"])
-        #expect(items(load.submenu!).map(\.isEnabled) == [true, false])
-        #expect(items(load.submenu!).first?.command == .loadToDeck(.a))
+        #expect(items(load.submenu!).map(\.isEnabled) == [true, true])
+        #expect(items(load.submenu!).map(\.command) == [.loadToDeck(.a), .loadToDeck(.b)])
         let many = items(ContextMenus.trackMenu(.init(selectionCount: 2))).first { $0.title == "Load" }!
         #expect(!many.isEnabled)
     }

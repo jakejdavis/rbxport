@@ -448,9 +448,9 @@ struct PhraseSpan: Equatable, Sendable {
 
 // MARK: - Keys
 
-/// What a key means to deck A. The Player group of `src/lib/shortcuts.ts`, less what is a library
-/// write (set/clear hot cues, store/delete memory cues: Phase 4), the grid editor and SYNC (the
-/// dual layouts).
+/// What a key means to a deck: A as typed, B with Shift. The Player group of
+/// `src/lib/shortcuts.ts`, less what is a library write (set/clear hot cues, store/delete memory
+/// cues: Phase 4) and the grid editor.
 enum PlayerKeyAction: Equatable, Sendable {
     case togglePlay
     case cueDown, cueUp
@@ -465,6 +465,8 @@ enum PlayerKeyAction: Equatable, Sendable {
     /// Zoom the detail waveform: -1 in, 1 out. Native addition (the React player has the wheel and buttons).
     case zoom(Int)
     case masterTempo, tempoReset, bpmUp, bpmDown
+    /// F1: BEAT SYNC (the two-deck layout).
+    case beatSync
     case metronomeSound
     /// Consumed with no effect: an auto-repeat of a one-shot key, or a key whose action needs a write.
     case swallow
@@ -486,6 +488,26 @@ enum PlayerKeymap {
     static let f9: UInt16 = 101, f10: UInt16 = 109, f11: UInt16 = 103, f12: UInt16 = 111
 
     private static let memoryKeys = ["a", "s", "d", "f", "g", "h", "j", "k", "l", ";"]
+
+    /// Characters Shift turns the number row and a few others into (US layout), back to the key.
+    private static let unshifted: [String: String] = [
+        "!": "1", "@": "2", "#": "3", "$": "4", "%": "5", "^": "6", "&": "7", "*": "8", "(": "9", "?": "/", "_": "-",
+        "+": "=", ":": ";",
+    ]
+
+    /// Which deck a chord is for and the chord as deck A would see it: Shift alone is deck B, in
+    /// the two-deck layout only (elsewhere B has no keys). Nil for a Shift chord that has no
+    /// deck to go to; anything else is deck A's. A key lifted after Shift was released is still
+    /// A's, which is why `PlayerModel` remembers where CUE and a pad went down.
+    static func route(_ chord: KeyChord, twoDecks: Bool) -> (deck: Deck, chord: KeyChord)? {
+        let mods = chord.modifiers.intersection([.command, .control, .option, .shift])
+        guard mods.contains(.shift) else { return (.a, chord) }
+        guard mods == .shift, twoDecks else { return nil }
+        var plain = chord
+        plain.modifiers = []
+        plain.character = unshifted[chord.character] ?? chord.character
+        return (.b, plain)
+    }
 
     /// What `chord` does, or nil to pass it on. `loaded` is whether deck A has a track: an idle
     /// deck ignores everything but Space and C. `typing` means a text field has focus.
@@ -513,6 +535,7 @@ enum PlayerKeymap {
         case space: return isRepeat ? .swallow : .togglePlay
         case left: return loaded ? .jump(-1) : nil
         case right: return loaded ? .jump(1) : nil
+        case f1: return loaded ? (isRepeat ? .swallow : .beatSync) : nil
         case f2: return loaded ? (isRepeat ? .swallow : .masterTempo) : nil
         case f3: return loaded ? .tempoReset : nil
         case f6: return loaded ? .bpmDown : nil
@@ -547,6 +570,6 @@ enum PlayerKeymap {
         guard mods.isEmpty else { return false }
         let c = chord.character
         return ["q", "b", "n", "m", "x", "i", "o", "r", "/", "=", "+", "-", "4", "5", "6", "7", "8", "9"].contains(c)
-            || memoryKeys.contains(c) || [left, right, f2, f3, f6, f7, f9].contains(chord.keyCode)
+            || memoryKeys.contains(c) || [left, right, f1, f2, f3, f6, f7, f9].contains(chord.keyCode)
     }
 }
